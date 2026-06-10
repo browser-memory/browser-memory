@@ -1,0 +1,35 @@
+{
+  "name": "browser-memory",
+  "version": "0.1.0",
+  "description": "Local MCP server that gives an agent a reusable memory of web actions (learn once, replay deterministically).",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "bin": {
+    "browser-memory": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && mkdir -p dist/learn && cp src/learn/distill-prompt.md dist/learn/",
+    "test": "node --test --import tsx \"./test/*.test.ts\"",
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:composite": "tsx scripts/smoke-composite.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.0",
+    "playwright": "^1.60.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

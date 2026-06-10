@@ -1,0 +1,6 @@
+node_modules/
+dist/
+*.log
+# secretos / estado local — nunca versionar
+creds.local.json
+.tool-memory/

@@ -1,0 +1,27 @@
+{
+  "name": "wikipedia-first-result",
+  "version": 1,
+  "site": "es.wikipedia.org",
+  "intent": "buscar en wikipedia y devolver la url del primer resultado",
+  "keywords": ["wikipedia", "buscar", "primer", "resultado"],
+  "type": "primitive",
+  "side_effect": "read",
+  "requires": { "params": { "q": "string" }, "env": {} },
+  "provides": { "result": { "articleUrl": "url" } },
+  "recipe": {
+    "kind": "playwright",
+    "steps": [
+      {
+        "action": "navigate",
+        "url": "https://es.wikipedia.org/w/index.php?search={{q}}&fulltext=1&ns0=1"
+      },
+      { "action": "assert_precondition", "expr": ".mw-search-result-heading a" }
+    ]
+  },
+  "result_extractor": {
+    "type": "dom",
+    "fn": "() => { const a = document.querySelector('.mw-search-result-heading a'); return { articleUrl: a ? a.href : null }; }"
+  },
+  "success_assertion": { "type": "dom", "expr": ".mw-search-result-heading a" },
+  "health": { "last_ok": null, "fail_count": 0 }
+}

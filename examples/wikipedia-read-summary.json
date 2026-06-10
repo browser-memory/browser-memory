@@ -1,0 +1,24 @@
+{
+  "name": "wikipedia-read-summary",
+  "version": 1,
+  "site": "es.wikipedia.org",
+  "intent": "abrir un articulo de wikipedia por url y devolver titulo y primer parrafo",
+  "keywords": ["wikipedia", "articulo", "resumen", "leer"],
+  "type": "primitive",
+  "side_effect": "read",
+  "requires": { "params": { "articleUrl": "url" }, "env": {} },
+  "provides": { "result": { "title": "string", "summary": "string" } },
+  "recipe": {
+    "kind": "playwright",
+    "steps": [
+      { "action": "navigate", "url": "{{articleUrl}}" },
+      { "action": "assert_precondition", "expr": "#mw-content-text p" }
+    ]
+  },
+  "result_extractor": {
+    "type": "dom",
+    "fn": "() => { const h = document.querySelector('#firstHeading'); const p = document.querySelector('#mw-content-text p'); return { title: h ? h.textContent.trim() : null, summary: p ? p.textContent.trim().slice(0, 280) : null }; }"
+  },
+  "success_assertion": { "type": "dom", "expr": "#mw-content-text p" },
+  "health": { "last_ok": null, "fail_count": 0 }
+}

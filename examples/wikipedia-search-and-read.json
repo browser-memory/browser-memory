@@ -1,0 +1,14 @@
+{
+  "name": "wikipedia-search-and-read",
+  "version": 1,
+  "type": "composite",
+  "site": "es.wikipedia.org",
+  "intent": "buscar un tema en wikipedia y leer el resumen del primer articulo",
+  "keywords": ["wikipedia", "buscar", "leer", "resumen", "tema"],
+  "params": { "q": "string" },
+  "chain": [
+    { "tool": "wikipedia-first-result", "in": { "q": "{{q}}" }, "out": "articleUrl" },
+    { "tool": "wikipedia-read-summary", "in": { "articleUrl": "{{articleUrl}}" } }
+  ],
+  "health": { "last_ok": null, "fail_count": 0 }
+}

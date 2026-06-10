@@ -1,0 +1,44 @@
+{
+  "name": "wikipedia-search",
+  "version": 1,
+  "site": "es.wikipedia.org",
+  "intent": "buscar articulos en wikipedia por texto y devolver titulos y links",
+  "keywords": ["wikipedia", "buscar", "search", "articulo", "wiki"],
+  "type": "primitive",
+  "side_effect": "read",
+  "requires": {
+    "params": { "q": "string" },
+    "env": {}
+  },
+  "provides": {
+    "result": { "title": "string", "url": "url" }
+  },
+  "recipe": {
+    "kind": "playwright",
+    "steps": [
+      {
+        "action": "navigate",
+        "url": "https://es.wikipedia.org/w/index.php?search={{q}}&fulltext=1&ns0=1"
+      },
+      {
+        "action": "assert_precondition",
+        "expr": ".mw-search-results, .searchresults"
+      }
+    ]
+  },
+  "result_extractor": {
+    "type": "dom",
+    "fn": "() => Array.from(document.querySelectorAll('.mw-search-result-heading a')).slice(0, 10).map(a => ({ title: a.textContent.trim(), url: a.href }))"
+  },
+  "success_assertion": {
+    "type": "dom",
+    "expr": ".mw-search-result-heading a"
+  },
+  "auth": null,
+  "provenance": {
+    "learned_at": "2026-06-10",
+    "from_trace": null,
+    "source_url": "https://es.wikipedia.org"
+  },
+  "health": { "last_ok": null, "fail_count": 0 }
+}

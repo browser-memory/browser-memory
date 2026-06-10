@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "tool-memory": {
+      "command": "node",
+      "args": ["./dist/index.js"]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest", "--cdp-endpoint", "http://127.0.0.1:9333"]
+    }
+  }
+}
