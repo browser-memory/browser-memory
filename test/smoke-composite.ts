@@ -17,7 +17,7 @@ import { runComposite } from "../src/runner/compose.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const load = (f: string) =>
-  JSON.parse(readFileSync(join(here, "../examples", f), "utf8"));
+  JSON.parse(readFileSync(join(here, "fixtures", f), "utf8"));
 
 async function main() {
   console.log("== E0: Chrome compartido ==");

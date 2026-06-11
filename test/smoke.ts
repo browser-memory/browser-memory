@@ -18,7 +18,7 @@ import { run } from "../src/runner/execute.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const exampleJson = JSON.parse(
-  readFileSync(join(here, "../examples/wikipedia-search.json"), "utf8"),
+  readFileSync(join(here, "fixtures/wikipedia-search.json"), "utf8"),
 );
 
 function log(...a: unknown[]) {

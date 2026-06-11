@@ -4,3 +4,5 @@ dist/
 # secretos / estado local — nunca versionar
 creds.local.json
 .tool-memory/
+# guía local para el agente — no versionar ni publicar
+CLAUDE.md

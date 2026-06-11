@@ -15,8 +15,8 @@
   "scripts": {
     "build": "tsc && mkdir -p dist/learn && cp src/learn/distill-prompt.md dist/learn/",
     "test": "node --test --import tsx \"./test/*.test.ts\"",
-    "smoke": "tsx scripts/smoke.ts",
-    "smoke:composite": "tsx scripts/smoke-composite.ts",
+    "smoke": "tsx test/smoke.ts",
+    "smoke:composite": "tsx test/smoke-composite.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
