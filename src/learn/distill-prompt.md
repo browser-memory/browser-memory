@@ -15,8 +15,12 @@ sobre los archivos de la trace.
 - `network.json` *(opcional)* — captura COMPLETA de la red del episodio, grabada por el
   server vía CDP de forma continua (sobrevive redirects, no es el último snapshot). Cada
   entrada trae `method`, `url`, `status`, `type` (resourceType) y a veces `role` (anotación
-  del agente). Filtrá por `type: "xhr" | "fetch"` y mirá si hay uno cuya respuesta trae los
-  datos: candidato a camino HTTP directo. No hay headers ni bodies (no se guardan secretos).
+  del agente). Para las entradas `type: "xhr" | "fetch"` (las llamadas a APIs) trae ADEMÁS
+  `mime`, `reqHeaders`, `reqBody` y `resBody` — con secretos redactados a `"<redacted>"`
+  (cookies, authorization, password, token...). **Eso es lo que te deja reconstruir un recipe
+  HTTP directo:** filtrá por `xhr`/`fetch`, encontrá la request cuya `resBody` contiene el dato
+  que buscás, y copiá `method`/`url`/`reqHeaders`/`reqBody` al recipe (ver §2). El operationName
+  de GraphQL viaja en la URL o en `reqBody`.
 - `screenshots/` *(opcional)* — `page-N.png`: estado final de cada pestaña al cerrar el
   episodio. Contexto visual; no se ejecutan.
 
@@ -35,10 +39,26 @@ sobre los archivos de la trace.
    un segmento).
 
 ### 2. Por cada segmento, escribir una recipe
-- **HTTP directo** si `network.json` muestra un endpoint limpio y estable con auth viable
-  (`{ kind: "http", method, url, headers, body, jsonPath }`). Preferilo cuando aplique.
-- **Playwright directo** si no (`{ kind: "playwright", steps: [...] }`) con los selectores
-  exactos de la narración.
+- **HTTP directo** — PREFERILO para **lecturas** (búsquedas, listados) cuando una entrada
+  `xhr`/`fetch` de `network.json` devolvió el dato en su `resBody`. Es más rápido y determinista
+  (no abre navegador). Construilo así:
+  - `method`, `url` ← copialos de la entrada. Parametrizá lo que varía: el término de búsqueda en
+    la query string (`...?q={{q}}`) o en el `body`.
+  - `headers` ← tomá de `reqHeaders` SOLO los que el endpoint necesita para responder:
+    típicamente `content-type`, `accept`, y headers de cliente (`x-...-client`, `apollographql-*`).
+    **NO copies** los `"<redacted>"` (cookie/authorization): la sesión la aporta el entorno
+    (`requires.env`), no el tool. Si el endpoint NO responde sin cookie, NO sirve como HTTP →
+    cae a Playwright.
+  - `body` ← para POST (GraphQL), copiá `reqBody` y reemplazá el valor concreto por `{{param}}`
+    (ej. en `{"variables":{"query":"nike"}}` → `"query":"{{q}}"`). Cuidado con el escaping: el
+    body es un string, las comillas internas van escapadas.
+  - `jsonPath` ← la ruta dentro del JSON de respuesta hasta el dato (ej. `data.search.results`).
+    Mirá la forma real en `resBody` para acertarla.
+  - Verificá: probá mentalmente que `url`+`headers`+`body` sin las cookies redactadas alcanzan
+    para traer `resBody`. Si dependés de un token por-sesión que estaba redactado, NO es HTTP.
+- **Playwright directo** si no aplica HTTP (`{ kind: "playwright", steps: [...] }`) con los
+  selectores exactos de la narración. Default para writes y para endpoints que exigen tokens
+  por-sesión.
 
 ### 3. Parametrizar
 Reemplazá inputs concretos y handles por params: `search-person(name)`, no
