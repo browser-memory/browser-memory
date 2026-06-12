@@ -30,7 +30,7 @@ async function main() {
   saveItem(load("wikipedia-search-and-read.json"));
 
   console.log("== discovery prioriza el composite ==");
-  const cands = discover("buscar y leer un tema en wikipedia");
+  const cands = discover(["wikipedia"]);
   console.log("   top →", cands[0]?.name, `(${cands[0]?.type})`);
   if (cands[0]?.type !== "composite") throw new Error("el composite no quedó primero");
 

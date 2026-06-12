@@ -32,6 +32,37 @@ function recipeTexts(tool: Tool): string[] {
   return texts.filter(Boolean);
 }
 
+/**
+ * Junta los strings que el runner le pasa a Playwright como SELECTOR (no como valor):
+ * el `selector` de click/type/fill/press, el `expr`/`selector` de wait_for/
+ * assert_precondition, y el `expr` de un success_assertion de tipo dom (va a `page.$`).
+ */
+function selectorStrings(tool: Tool): string[] {
+  const sels: string[] = [];
+  if (tool.recipe.kind === "playwright") {
+    for (const s of tool.recipe.steps) {
+      if (s.action === "wait_for" || s.action === "assert_precondition") {
+        const v = s.expr ?? s.selector;
+        if (v) sels.push(v);
+      } else if (s.selector) {
+        sels.push(s.selector);
+      }
+    }
+  }
+  if (tool.success_assertion.type === "dom") sels.push(tool.success_assertion.expr);
+  return sels;
+}
+
+/**
+ * Notación de snapshot de Playwright-MCP (rol + nombre accesible): `button "Enviar"`,
+ * `textbox "Asunto"`. NO es CSS — `page.click` la pasa al parser de CSS, la comilla
+ * lo rompe y el tool sale `tool-roto` en el primer run (sin red de smoke para writes).
+ * Heurística: una palabra inicial seguida de un string entre comillas. No matchea CSS
+ * real (`div[role="button"]`, `[aria-label="x"]`, `.clase`, `#id`): ahí la comilla va
+ * dentro de `[...]`, nunca pegada a un token suelto al inicio.
+ */
+const SNAPSHOT_REF = /^\s*[a-zA-Z][\w-]*\s+["']/;
+
 /** Devuelve la lista de problemas (vacía = tool sano). */
 export function lintTool(tool: Tool): string[] {
   const problems: string[] = [];
@@ -78,6 +109,17 @@ export function lintTool(tool: Tool): string[] {
     if (usesBare && !readsFromParams(p)) {
       problems.push(
         `el extractor usa '${p}' suelto; los params llegan como 2º argumento — usá params.${p}`,
+      );
+    }
+  }
+
+  // 6. selectores en notación de snapshot (rol + nombre) en vez de CSS: rompen el
+  //    parser de CSS de Playwright en el primer run. El smoke-run no cubre writes.
+  for (const sel of selectorStrings(tool)) {
+    if (SNAPSHOT_REF.test(sel)) {
+      problems.push(
+        `selector en notación de snapshot, no CSS: \`${sel}\` — convertilo a un ` +
+          `selector CSS real (aria-label, clase, atributo), ej. \`[aria-label="..."]\``,
       );
     }
   }

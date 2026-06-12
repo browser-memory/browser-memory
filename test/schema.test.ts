@@ -36,3 +36,24 @@ test("side_effect inválido → rechazado", () => {
   const bad = { ...valid, side_effect: "explode" };
   assert.throws(() => parseTool(bad));
 });
+
+test("success_assertion text acepta lista de alternativas + within_ms", () => {
+  const t = parseTool({
+    ...valid,
+    success_assertion: {
+      type: "text",
+      contains: ["Mensaje enviado", "Se envió el mensaje"],
+      within_ms: 4000,
+    },
+  });
+  assert.deepEqual(t.success_assertion, {
+    type: "text",
+    contains: ["Mensaje enviado", "Se envió el mensaje"],
+    within_ms: 4000,
+  });
+});
+
+test("success_assertion text con lista vacía → inválido", () => {
+  const bad = { ...valid, success_assertion: { type: "text", contains: [] } };
+  assert.throws(() => parseTool(bad));
+});

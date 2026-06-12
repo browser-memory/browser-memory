@@ -12,8 +12,13 @@ sobre los archivos de la trace.
 - `narration.json` — los pasos canónicos del camino que funcionó (con selectores y, para
   lecturas, `reader_fn`). Es la señal limpia: el agente ya separó los pasos que importaron del
   ruido de exploración.
-- `network.json` *(opcional)* — salida de `browser_network_requests`. Mirá si hay un XHR/fetch
-  cuya respuesta trae los datos: candidato a camino HTTP directo.
+- `network.json` *(opcional)* — captura COMPLETA de la red del episodio, grabada por el
+  server vía CDP de forma continua (sobrevive redirects, no es el último snapshot). Cada
+  entrada trae `method`, `url`, `status`, `type` (resourceType) y a veces `role` (anotación
+  del agente). Filtrá por `type: "xhr" | "fetch"` y mirá si hay uno cuya respuesta trae los
+  datos: candidato a camino HTTP directo. No hay headers ni bodies (no se guardan secretos).
+- `screenshots/` *(opcional)* — `page-N.png`: estado final de cada pestaña al cerrar el
+  episodio. Contexto visual; no se ejecutan.
 
 ## Tarea
 
@@ -40,6 +45,14 @@ Reemplazá inputs concretos y handles por params: `search-person(name)`, no
 `search-person-matias`. La URL/valores usan placeholders `{{param}}`.
 
 **Reglas duras del runner (respetalas o el tool sale roto y `save` lo rechaza):**
+- Cada `selector` (y el `expr` de wait_for/assert_precondition y del success_assertion
+  dom) DEBE ser un **selector CSS válido** — `aria-label`, clase, atributo, id. El runner
+  se lo pasa tal cual a Playwright como CSS. NUNCA uses la notación rol+nombre del
+  snapshot (`button "Enviar"`, `textbox "Asunto"`): la narración viene de un snapshot de
+  accesibilidad, pero eso NO es CSS y la comilla rompe el parser al primer run. Convertí
+  rol+nombre a CSS: `button "Enviar"` → `[aria-label="Enviar"]` o `[aria-label*="Enviar"]`;
+  `textbox "Asunto"` → `[aria-label="Asunto"]` o `input[name="subjectbox"]`. El linter de
+  `save` rechaza un selector en notación de snapshot.
 - Los placeholders son SIEMPRE doble llave `{{param}}`. Una sola llave `{param}` NO se
   interpola: queda literal en la URL. El linter de `save` rechaza una sola llave.
 - El runner hace reemplazo literal; NO ejecuta transformaciones que describas en prosa.
@@ -59,7 +72,15 @@ Reemplazá inputs concretos y handles por params: `search-person(name)`, no
   - `{ "type": "dom", "expr": "<selector CSS>" }` — **preferido**: éxito = el elemento existe.
     `expr` es un **selector CSS** puro (ej. `".mw-search-results"`), NO una expresión JS.
   - `{ "type": "text", "contains": "<texto>" }` — éxito = la página contiene ese texto.
+    `contains` también admite una **lista** de alternativas (`["Mensaje enviado", "Se envió el
+    mensaje", "Message sent"]`) y matchea con cualquiera: usala para confirmadores cuyo wording
+    varía por idioma/versión, en vez de apostar a un único string exacto.
   - `{ "type": "json", "jsonPath": "<ruta>" }` — solo para recipes http.
+  - **Confirmadores transitorios/asíncronos** (toasts del tipo "enviado/guardado" que aparecen
+    tras una llamada de red y se desvanecen): agregá `"within_ms": <ms>` (ej. `4000`) en la
+    assertion `dom`/`text`. El runner reintenta dentro de esa ventana en vez de chequear una sola
+    vez justo tras el click — si no, lo perdés por carrera y un write que SÍ ocurrió se reporta
+    como `tool-roto`. La assertion ya cumplida retorna al instante, así que no penaliza lecturas.
 - `side_effect`: `read` | `write-reversible` | `write-irreversible`.
 - `commit_step_index` si es `write-irreversible` (paso desde el cual es irreversible).
 - `result_extractor` para lecturas:
@@ -128,6 +149,7 @@ estático es la red (no se puede probar sin causar el efecto).
 {
   "name": "site-do-flow",
   "type": "composite",
+  "site": "site.com",
   "intent": "...",
   "params": { "name": "string", "text": "string" },
   "chain": [
@@ -136,3 +158,6 @@ estático es la red (no se puede probar sin causar el efecto).
   ]
 }
 ```
+
+**Poné SIEMPRE `site` en el composite** (el dominio del sitio, igual que en las
+primitivas): el discovery matchea por sitio y un composite sin `site` no se descubre.

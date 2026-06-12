@@ -1,86 +1,77 @@
-import { listIndex } from "./store.js";
+import { listIndex, normalizeSite } from "./store.js";
 import type { IndexEntry, SideEffect } from "../schema/tool.js";
 
 /**
- * Discovery (spec §11.3): matchea el goal en lenguaje natural contra el índice por
- * dominio + overlap de keywords + fuzzy sobre intent. Sin embeddings (se suman solo
- * si el matcheo por palabras queda corto).
+ * Discovery: matchea POR SITIO. La entrada es una lista de sitios (ej. ["infobae"],
+ * ["airbnb", "wikipedia"]) — el nombre de marca o el dominio completo, da igual.
+ * Devuelve TODAS las tools de los sitios que reconozca en memoria (incluidas
+ * login/auth y demás precondiciones); el agente decide cuál correr y en qué orden.
+ *
+ * Si ninguno de los sitios pedidos está en memoria, devuelve VACÍO: ahí no hay nada
+ * aprendido → el agente explora con playwright y captura tools nuevas (request →
+ * distill → save).
+ *
+ * No hay ranking ni score: el match es binario por sitio. El único orden es composites
+ * primero (§10.2); para el resto se preserva el orden del índice. El agente elige por
+ * el `intent`.
  */
 
 export interface Candidate {
   name: string;
   type: "primitive" | "composite";
-  score: number;
   site: string;
   intent: string;
   params: string[];
   side_effect: SideEffect;
 }
 
-const STOP = new Set([
-  "el", "la", "los", "las", "un", "una", "de", "del", "en", "a", "y", "o",
-  "para", "con", "que", "the", "a", "an", "of", "in", "to", "and", "or",
+// Partes de dominio que NO identifican a un sitio (TLDs y subdominios genéricos).
+const GENERIC_DOMAIN_PARTS = new Set([
+  "www", "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "co",
 ]);
 
-function tokenize(s: string): string[] {
-  return s
+/**
+ * Tokens-nombre de un sitio: sus labels significativos, sin TLD ni subdominios
+ * genéricos. Ej.: "infobae.com" → ["infobae"], "es.wikipedia.org" → ["wikipedia"],
+ * "news.ycombinator.com" → ["news", "ycombinator"]. Length >= 3 descarta ccTLDs
+ * y raíces de una/dos letras ("es", "ar", "x") que no identifican nada.
+ */
+function siteNameTokens(site: string): string[] {
+  return site
     .toLowerCase()
-    .normalize("NFD")
-    .replace(/\p{Diacritic}/gu, "") // saca acentos
-    .split(/[^a-z0-9.]+/)
-    .filter((t) => t.length > 1 && !STOP.has(t));
+    .split(".")
+    .filter((p) => p.length >= 3 && !GENERIC_DOMAIN_PARTS.has(p));
 }
 
-/** Substring fuzzy: cuántos tokens del goal aparecen dentro del intent. */
-function intentOverlap(goalTokens: string[], intent: string): number {
-  const i = intent.toLowerCase();
-  let hits = 0;
-  for (const t of goalTokens) if (i.includes(t)) hits++;
-  return goalTokens.length ? hits / goalTokens.length : 0;
+/** Composites primero (§10.2); estable para el resto. */
+function compositesFirst(a: IndexEntry, b: IndexEntry): number {
+  return (b.type === "composite" ? 1 : 0) - (a.type === "composite" ? 1 : 0);
 }
 
-function scoreEntry(goalTokens: string[], goalRaw: string, e: IndexEntry): number {
-  const kw = new Set(e.keywords.map((k) => k.toLowerCase()));
-  const kwHits = goalTokens.filter((t) => kw.has(t)).length;
-  const kwScore = kw.size ? kwHits / Math.max(goalTokens.length, 1) : 0;
-
-  // Dominio: si el goal menciona el sitio (o su raíz sin TLD), peso fuerte.
-  const siteRoot = e.site.split(".")[0];
-  const domainBonus =
-    goalRaw.toLowerCase().includes(e.site) ||
-    goalTokens.includes(siteRoot)
-      ? 0.4
-      : 0;
-
-  const intentScore = intentOverlap(goalTokens, e.intent);
-
-  // Combinación simple y legible. domainBonus es aditivo y se clampa a 1.
-  const score = Math.min(1, 0.5 * kwScore + 0.3 * intentScore + domainBonus);
-  return score;
+function toCandidate(e: IndexEntry): Candidate {
+  return {
+    name: e.name,
+    type: e.type,
+    site: e.site,
+    intent: e.intent,
+    params: [], // se completa en index.ts leyendo el item (params/requires)
+    side_effect: e.side_effect,
+  };
 }
 
-export function discover(goal: string, limit = 5): Candidate[] {
-  const goalTokens = tokenize(goal);
-  const index = listIndex();
+export function discover(sites: string[]): Candidate[] {
+  const requested = (sites ?? []).map(normalizeSite).filter(Boolean);
+  if (requested.length === 0) return [];
 
-  return index
-    .map((e) => ({ e, score: scoreEntry(goalTokens, goal, e) }))
-    .filter(({ score }) => score > 0.1)
-    // Composites primero (spec §10.2): ante igualdad, gana el composite; además un
-    // pequeño boost para que un composite que matchea supere a su primitiva par.
-    .sort((a, b) => {
-      const sa = a.score + (a.e.type === "composite" ? 0.05 : 0);
-      const sb = b.score + (b.e.type === "composite" ? 0.05 : 0);
-      return sb - sa;
-    })
-    .slice(0, limit)
-    .map(({ e, score }) => ({
-      name: e.name,
-      type: e.type,
-      score: Number(score.toFixed(3)),
-      site: e.site,
-      intent: e.intent,
-      params: [], // se completa en index.ts leyendo el item (params/requires)
-      side_effect: e.side_effect,
-    }));
+  const matched: IndexEntry[] = [];
+  for (const e of listIndex()) {
+    if (!e.site) continue; // composites sin site declarado no son reconocibles por sitio
+    const site = normalizeSite(e.site); // defensivo: por si quedara un índice sin migrar
+    const hit =
+      requested.includes(site) ||
+      siteNameTokens(site).some((t) => requested.includes(t));
+    if (hit) matched.push(e);
+  }
+
+  return matched.sort(compositesFirst).map(toCandidate);
 }

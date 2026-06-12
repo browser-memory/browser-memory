@@ -1,7 +1,22 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import {
+  mkdirSync,
+  existsSync,
+  cpSync,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { join, basename } from "node:path";
 import { chromium } from "playwright";
-import { cdpPort, cdpEndpoint, paths, resolveChromeBinary } from "../config.js";
+import {
+  cdpPort,
+  cdpEndpoint,
+  paths,
+  resolveChromeBinary,
+  realChromeUserDataDir,
+  reseedEnabled,
+} from "../config.js";
 
 /**
  * Dueño del ciclo de vida del Chrome único compartido (spec §4).
@@ -16,6 +31,123 @@ import { cdpPort, cdpEndpoint, paths, resolveChromeBinary } from "../config.js";
  */
 
 let child: ChildProcess | undefined;
+
+/** Subdirectorios de caché que NO copiamos al sembrar (son la mayor parte del peso). */
+const CACHE_DIRS = new Set([
+  "Cache",
+  "Code Cache",
+  "GPUCache",
+  "DawnCache",
+  "DawnGraphiteCache",
+  "DawnWebGPUCache",
+  "GraphiteDawnCache",
+  "Application Cache",
+  "Media Cache",
+  "CacheStorage",
+  "ScriptCache",
+  "Service Worker",
+]);
+
+/**
+ * Siembra el perfil dedicado a partir del Chrome real del usuario — SOLO la primera
+ * vez (si todavía no hay un Default). Copia las sesiones/cuentas (Cookies, Login Data,
+ * Local Storage, etc.) salteando los cachés, y `Local State` para que el cifrado de
+ * cookies sea coherente. Best-effort: si no hay perfil real, arrancamos vacío y el
+ * usuario se loguea a mano una vez.
+ */
+function seedProfileIfEmpty(): void {
+  const dstDefault = join(paths.chromeProfile, "Default");
+  if (existsSync(dstDefault)) return; // ya sembrado / ya en uso: no tocar.
+
+  const srcRoot = realChromeUserDataDir();
+  if (!srcRoot) return; // sin Chrome real detectable: arranca vacío.
+  const srcDefault = join(srcRoot, "Default");
+  if (!existsSync(srcDefault)) return;
+
+  mkdirSync(paths.chromeProfile, { recursive: true });
+  cpSync(srcDefault, dstDefault, {
+    recursive: true,
+    filter: (src) => !CACHE_DIRS.has(basename(src)),
+  });
+  const localState = join(srcRoot, "Local State");
+  if (existsSync(localState)) {
+    cpSync(localState, join(paths.chromeProfile, "Local State"));
+  }
+  disableSessionRestore();
+  process.stderr.write(
+    `[tool-memory] Perfil sembrado desde ${srcRoot} (cuentas logueadas, sin cachés).\n`,
+  );
+}
+
+/** Archivos (no-dir) de sesión/auth que refrescamos en cada re-seed. */
+const AUTH_FILES = [
+  "Cookies",
+  "Cookies-journal",
+  "Login Data",
+  "Login Data-journal",
+  "Web Data",
+  "Web Data-journal",
+];
+/** Directorios de sesión/auth (cookies modernas viven en Network/). */
+const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
+
+/**
+ * Refresca SOLO los archivos de sesión/auth desde el Chrome real (no el perfil entero).
+ * Pensado para correr en cada lanzamiento si reseedEnabled: arrastra logins nuevos
+ * rápido y sin desgastar el disco. Best-effort: si no hay perfil sembrado todavía, lo
+ * deja para seedProfileIfEmpty; si el Chrome real está abierto, copia el último estado
+ * en disco (puede estar levemente atrás, pero no rompe).
+ */
+function reseedAuth(): void {
+  const srcRoot = realChromeUserDataDir();
+  if (!srcRoot) return;
+  const srcDefault = join(srcRoot, "Default");
+  const dstDefault = join(paths.chromeProfile, "Default");
+  if (!existsSync(srcDefault) || !existsSync(dstDefault)) return;
+
+  for (const f of AUTH_FILES) {
+    const src = join(srcDefault, f);
+    if (existsSync(src)) cpSync(src, join(dstDefault, f));
+  }
+  for (const d of AUTH_DIRS) {
+    const src = join(srcDefault, d);
+    if (!existsSync(src)) continue;
+    const dst = join(dstDefault, d);
+    rmSync(dst, { recursive: true, force: true }); // evita mezclar leveldb viejo/nuevo
+    cpSync(src, dst, { recursive: true, filter: (p) => !CACHE_DIRS.has(basename(p)) });
+  }
+  const localState = join(srcRoot, "Local State");
+  if (existsSync(localState)) {
+    cpSync(localState, join(paths.chromeProfile, "Local State")); // coherencia de cifrado
+  }
+  disableSessionRestore();
+  process.stderr.write(`[tool-memory] Auth re-sembrada desde ${srcRoot}.\n`);
+}
+
+/**
+ * Deja el perfil listo para arrancar SIN restaurar las pestañas viejas del usuario:
+ * borra los archivos de sesión y fuerza "abrir nueva pestaña" + salida limpia en las
+ * preferencias. Mantiene los datos (cookies/login); solo evita el ruido de tabs.
+ */
+function disableSessionRestore(): void {
+  const def = join(paths.chromeProfile, "Default");
+  for (const f of ["Current Session", "Current Tabs", "Last Session", "Last Tabs"]) {
+    rmSync(join(def, f), { force: true });
+  }
+  rmSync(join(def, "Sessions"), { recursive: true, force: true });
+
+  const prefsPath = join(def, "Preferences");
+  if (!existsSync(prefsPath)) return;
+  try {
+    const prefs = JSON.parse(readFileSync(prefsPath, "utf8")) as Record<string, any>;
+    prefs.session = { ...(prefs.session ?? {}), restore_on_startup: 5 };
+    delete prefs.session.startup_urls;
+    prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
+    writeFileSync(prefsPath, JSON.stringify(prefs));
+  } catch {
+    // Preferences ilegible: no es fatal, Chrome lo regenera.
+  }
+}
 
 /** ¿Hay ya un Chrome escuchando el endpoint CDP? */
 async function cdpAlive(): Promise<boolean> {
@@ -51,6 +183,11 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
   if (await cdpAlive()) {
     return { cdpEndpoint, reused: true };
   }
+
+  // Primera vez: sembramos el perfil con las cuentas del Chrome real del usuario.
+  seedProfileIfEmpty();
+  // Cada lanzamiento (1 vez por sesión, lazy): refrescamos auth si está habilitado.
+  if (reseedEnabled) reseedAuth();
 
   mkdirSync(paths.chromeProfile, { recursive: true });
 

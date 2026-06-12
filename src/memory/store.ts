@@ -34,6 +34,20 @@ function itemPath(name: string): string {
 }
 
 /**
+ * Normaliza un `site` a un dominio comparable: minúsculas, sin esquema (http/https),
+ * sin `www.` y sin path. Ej.: "https://www.Infobae.com/x" → "infobae.com". Lo aplican
+ * tanto el guardado (este módulo) como el discovery sobre el término pedido.
+ */
+export function normalizeSite(s: string): string {
+  return s
+    .toLowerCase()
+    .trim()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/.*$/, "");
+}
+
+/**
  * Guarda un item validándolo SIEMPRE antes de persistir. Dos puertas, ambas estáticas
  * (no tocan el navegador):
  *  1. esquema (parseMemoryItem) — la forma.
@@ -44,7 +58,12 @@ function itemPath(name: string): string {
 export function saveItem(raw: unknown): MemoryItem {
   ensureDirs();
   const item = parseMemoryItem(raw);
-  if (!isComposite(item)) {
+  if (isComposite(item)) {
+    // El discovery es por sitio: un composite sin `site` sería indescubrible. Si el
+    // distiller no lo puso, lo derivamos del sitio de la primera tool de su cadena
+    // (las primitivas se guardan antes que el composite).
+    if (!item.site) item.site = deriveCompositeSite(item);
+  } else {
     const problems = lintTool(item);
     if (problems.length) {
       throw new Error(
@@ -52,9 +71,25 @@ export function saveItem(raw: unknown): MemoryItem {
       );
     }
   }
+  // Site siempre normalizado en disco (sin esquema/www/path) para que el match por
+  // dominio exacto del discovery funcione.
+  if (item.site) item.site = normalizeSite(item.site);
   writeFileSync(itemPath(item.name), JSON.stringify(item, null, 2) + "\n");
   reindex();
   return item;
+}
+
+/** Sitio de un composite = el de la primera tool de su cadena que ya esté en memoria. */
+function deriveCompositeSite(c: Composite): string | undefined {
+  for (const step of c.chain) {
+    try {
+      const t = loadItem(step.tool);
+      if (t.site) return t.site;
+    } catch {
+      // la tool referida todavía no está en memoria; probamos el próximo paso.
+    }
+  }
+  return undefined;
 }
 
 /** Borra un item de la memoria (usado para revertir un save que no pasó el smoke-run). */

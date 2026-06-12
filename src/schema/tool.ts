@@ -77,10 +77,30 @@ export const ResultExtractor = z.union([
 ]);
 export type ResultExtractor = z.infer<typeof ResultExtractor>;
 
-/** Chequeo determinista y barato que confirma el éxito. OBLIGATORIO (§7). */
+/**
+ * Chequeo determinista y barato que confirma el éxito. OBLIGATORIO (§7).
+ *
+ * `within_ms` (dom/text): ventana de reintento. Muchos confirmadores son asíncronos
+ * o transitorios (el toast "Mensaje enviado" de Gmail aparece tras el envío por red y
+ * desaparece a los segundos); un único chequeo sincrónico justo tras el click los
+ * pierde por carrera. Con `within_ms` el runner reintenta hasta cumplir o agotar la
+ * ventana. Default razonable en el runner; subilo para confirmadores lentos.
+ *
+ * `text.contains` admite un string o una LISTA de alternativas (match = cualquiera):
+ * robustece contra variantes de wording/idioma ("Mensaje enviado" / "Se envió el
+ * mensaje" / "Message sent").
+ */
 export const SuccessAssertion = z.union([
-  z.object({ type: z.literal("dom"), expr: z.string() }),
-  z.object({ type: z.literal("text"), contains: z.string() }),
+  z.object({
+    type: z.literal("dom"),
+    expr: z.string(),
+    within_ms: z.number().int().positive().optional(),
+  }),
+  z.object({
+    type: z.literal("text"),
+    contains: z.union([z.string(), z.array(z.string()).min(1)]),
+    within_ms: z.number().int().positive().optional(),
+  }),
   z.object({ type: z.literal("json"), jsonPath: z.string() }),
 ]);
 export type SuccessAssertion = z.infer<typeof SuccessAssertion>;

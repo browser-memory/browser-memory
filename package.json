@@ -17,6 +17,13 @@
     "test": "node --test --import tsx \"./test/*.test.ts\"",
     "smoke": "tsx test/smoke.ts",
     "smoke:composite": "tsx test/smoke-composite.ts",
+    "verify:netlog": "tsx test/verify-netlog.ts",
+    "inspect": "DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector -e TOOL_MEMORY_RESEED=1 npx tsx src/index.ts",
+    "inspect:dist": "npm run build && DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector -e TOOL_MEMORY_RESEED=1 node dist/index.js",
+    "inspect:tools": "TOOL_MEMORY_RESEED=1 npx -y @modelcontextprotocol/inspector --cli npx tsx src/index.ts --method tools/list",
+    "inspect:cli": "TOOL_MEMORY_RESEED=1 npx -y @modelcontextprotocol/inspector --cli npx tsx src/index.ts",
+    "trace": "python3 webtrace/cctrace.py",
+    "trace:web": "python3 webtrace/cctrace_web.py",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

@@ -3,8 +3,11 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
+import { join } from "node:path";
+
 import { launchSharedChrome, stopSharedChrome } from "./browser/chrome.js";
-import { disconnectReplay } from "./browser/connect.js";
+import { disconnectReplay, captureScreenshotsInto } from "./browser/connect.js";
+import { startNetLog, getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
 import { discover } from "./memory/discover.js";
 import { loadItem, saveItem, removeItem } from "./memory/store.js";
 import { isComposite } from "./schema/tool.js";
@@ -29,9 +32,11 @@ Chrome con el server "playwright" (vía CDP: lo que hace uno lo ve el otro al in
 
 SEGUÍ SIEMPRE este loop cuando una tarea implique operar un sitio web:
 
-1. ANTES de explorar con el browser → llamá a \`discover(goal)\`. Si devuelve un
-   candidato con score razonable, EJECUTALO con \`run\` en vez de explorar. No abras
-   el navegador a mano si ya hay un tool que sirve.
+1. ANTES de explorar con el browser → llamá a \`discover(sites)\` pasando el/los
+   sitio(s) de la tarea (ej. ["infobae"] o ["airbnb","booking"]). Devuelve TODAS las
+   tools de esos sitios (incluida login/auth): elegí la que corresponde por su intent
+   y EJECUTALA con \`run\` en vez de explorar. No abras el navegador a mano si ya hay
+   un tool que sirve.
 
 2. Si NO hay tool (discover vacío) → resolvé la tarea de verdad con el server
    "playwright" (snapshot, navigate, click...). Cuando termine BIEN, capturá el
@@ -62,14 +67,20 @@ const server = new McpServer(
 
 server.tool(
   "discover",
-  "PRIMER PASO de toda tarea web: llamá a discover ANTES de abrir el browser. Busca " +
-    "en la memoria tools/composites que resuelven el objetivo (lenguaje natural) y " +
-    "devuelve candidatos con score, params y side_effect. Si hay un candidato con " +
-    "score razonable, ejecutalo con run() en vez de explorar. Si vuelve vacío, recién " +
-    "ahí explorá con playwright y después capturá con request().",
-  { goal: z.string().describe("el objetivo en lenguaje natural, ej. 'buscar gatos en wikipedia'") },
-  async ({ goal }) => {
-    const candidates = discover(goal).map((c) => {
+  "PRIMER PASO de toda tarea web: llamá a discover ANTES de abrir el browser. El " +
+    "matcheo es POR SITIO: pasá el/los sitio(s) de la tarea (marca o dominio, ej. " +
+    "['infobae'], ['airbnb','booking']) y devuelve TODAS las tools de esos sitios " +
+    "— incluidas login/auth — con los composites primero. Elegí la que corresponde por " +
+    "su intent y, si hace falta, corré antes su login. Si ninguno de los sitios está en " +
+    "memoria vuelve VACÍO: ahí no hay nada aprendido, explorá con playwright y después " +
+    "capturá con request() para aprender tools nuevas.",
+  {
+    sites: z
+      .array(z.string())
+      .describe("sitio(s) de la tarea: marca o dominio, ej. ['infobae'] o ['airbnb','booking']"),
+  },
+  async ({ sites }) => {
+    const candidates = discover(sites).map((c) => {
       // Completamos los params reales leyendo el item (requires.params o params).
       try {
         const item = loadItem(c.name);
@@ -81,6 +92,20 @@ server.tool(
         return c;
       }
     });
+    // Todo discover marca el INICIO de una tarea nueva: levantamos Chrome (best-effort) y
+    // reseteamos+arrancamos el grabador de red SIEMPRE, haya tools o no. Así, aunque el
+    // agente corra una tool conocida y DESPUÉS explore una acción nueva en el mismo sitio,
+    // su red queda grabada (no dependemos de re-entrar por el branch "sin candidatos").
+    // Sobrevive redirects, a diferencia del snapshot del agente. Idempotente: si Chrome ya
+    // está vivo es un fast-path; si no, adelanta el launch que igual haría run().
+    try {
+      await launchSharedChrome();
+      await startNetLog();
+    } catch (e) {
+      process.stderr.write(
+        `[tool-memory] no pude prelanzar Chrome / iniciar el grabador: ${(e as Error).message}\n`,
+      );
+    }
     return { content: [{ type: "text", text: JSON.stringify(candidates, null, 2) }] };
   },
 );
@@ -201,7 +226,15 @@ server.tool(
   },
   async ({ goal, narration, network, console }) => {
     try {
-      const signal = learn({ goal, narration, network, console });
+      // La captura continua del server (CDP, completa) manda; el snapshot del agente se
+      // mergea encima por sus anotaciones de `role`. Así el distiller ve TODOS los networks.
+      const mergedNetwork = mergeNetwork(getNetLog(), network);
+      const signal = learn({ goal, narration, network: mergedNetwork, console });
+      // Congelamos screenshots del estado final "por las dudas" (best-effort, no bloquea).
+      await captureScreenshotsInto(join(signal.trace_path, "screenshots"));
+      // Episodio congelado: vaciamos el buffer para que la próxima tarea arranque limpia.
+      // (Si learn() hubiera fallado, no llegamos acá y la exploración sigue grabada para reintentar.)
+      clearNetLog();
       return { content: [{ type: "text", text: JSON.stringify(signal, null, 2) }] };
     } catch (e) {
       return {
@@ -213,17 +246,9 @@ server.tool(
 );
 
 async function main(): Promise<void> {
-  // tool-memory es dueño del Chrome: lo levanta antes de servir requests.
-  // No abortamos si falla (discover/save no necesitan navegador); run lo reporta.
-  try {
-    const { reused } = await launchSharedChrome();
-    process.stderr.write(
-      `[tool-memory] Chrome compartido ${reused ? "reusado" : "lanzado"} en CDP.\n`,
-    );
-  } catch (e) {
-    process.stderr.write(`[tool-memory] Chrome no disponible: ${(e as Error).message}\n`);
-  }
-
+  // tool-memory es dueño del Chrome pero NO lo levanta al arrancar: lo hace lazy,
+  // recién cuando hace falta de verdad (un run, o un discover sin resultado que va a
+  // derivar en exploración). Así conectar el MCP / mandar un "hola" no abre nada.
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

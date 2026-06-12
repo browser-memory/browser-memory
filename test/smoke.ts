@@ -32,7 +32,7 @@ async function main() {
 
   log("== E1: guardar tool de ejemplo + discovery ==");
   saveTool(exampleJson);
-  const candidates = discover("buscar gatos en wikipedia");
+  const candidates = discover(["wikipedia"]);
   log("   discover →", JSON.stringify(candidates, null, 2));
   if (candidates[0]?.name !== "wikipedia-search") {
     throw new Error("discovery no encontró wikipedia-search en el top");

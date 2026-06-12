@@ -28,13 +28,31 @@ test("discovery prioriza composites sobre primitivas", () => {
   saveItem({
     name: "alpha-flow",
     type: "composite",
+    site: "echo.test", // discovery es por sitio: el composite debe declararlo para aparecer.
     intent: "alpha search flujo completo",
     keywords: ["alpha", "search"],
     params: { x: "string" },
     chain: [{ tool: "alpha-search", in: { x: "{{x}}" } }],
   });
-  const r = discover("alpha search");
+  // Pedimos el sitio → trae ambos; ante igualdad, el composite va primero (boost §10.2).
+  const r = discover(["echo.test"]);
   assert.equal(r[0].type, "composite", "el composite debe ir primero");
+});
+
+test("un composite sin site hereda el de la primera tool de su cadena", () => {
+  saveItem(httpEcho("beta-search", "https://x/{{x}}")); // site: echo.test
+  const saved = saveItem({
+    name: "beta-flow",
+    type: "composite",
+    // sin `site`: debe derivarse de beta-search.
+    intent: "beta flujo",
+    keywords: ["beta"],
+    params: { x: "string" },
+    chain: [{ tool: "beta-search", in: { x: "{{x}}" } }],
+  });
+  assert.equal(saved.type === "composite" && saved.site, "echo.test");
+  // y por lo tanto es descubrible por sitio:
+  assert.ok(discover(["echo.test"]).some((c) => c.name === "beta-flow"));
 });
 
 test("schema composite valida la cadena", async () => {

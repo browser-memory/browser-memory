@@ -25,6 +25,15 @@ export interface RunResult {
 const DEFAULT_TIMEOUT = 15000;
 /** Espera más corta para wait_for: es best-effort, no conviene bloquear 15s en vano. */
 const WAIT_FOR_TIMEOUT = 6000;
+/**
+ * Ventana por defecto de reintento del success_assertion (dom/text). El confirmador
+ * de una acción suele ser asíncrono o transitorio (un toast que aparece tras un envío
+ * por red y se va a los segundos); un único chequeo sincrónico lo pierde por carrera.
+ * Si la assertion ya se cumple, el poll retorna en el primer intento (no agrega latencia
+ * a las lecturas); solo el camino que falla espera hasta agotar la ventana.
+ */
+const DEFAULT_ASSERT_WINDOW = 4000;
+const ASSERT_POLL_INTERVAL = 300;
 
 /**
  * Filtros de transformación aplicables a un placeholder: {{q|kebab}}.
@@ -167,10 +176,27 @@ async function extractDom(
   return undefined;
 }
 
-async function checkAssertion(
-  page: Page,
-  a: SuccessAssertion,
-): Promise<boolean> {
+/** Alternativas de texto: `contains` puede ser un string o una lista (match = cualquiera). */
+function textAlternatives(a: Extract<SuccessAssertion, { type: "text" }>): string[] {
+  return Array.isArray(a.contains) ? a.contains : [a.contains];
+}
+
+/** Describe en prosa qué esperaba la assertion (para el detalle de la falla). */
+function describeAssertion(a: SuccessAssertion): string {
+  switch (a.type) {
+    case "dom":
+      return `que la página tuviera el elemento/expresión \`${a.expr}\``;
+    case "text":
+      return `que la página contuviera el texto ${textAlternatives(a)
+        .map((t) => `"${t}"`)
+        .join(" o ")}`;
+    case "json":
+      return `que el jsonPath \`${a.jsonPath}\` tuviera valor`;
+  }
+}
+
+/** Evalúa la assertion UNA vez (sin reintentos). */
+async function assertionHolds(page: Page, a: SuccessAssertion): Promise<boolean> {
   switch (a.type) {
     case "dom":
       // `expr` puede ser un selector CSS (presencia = éxito) o una expresión JS
@@ -181,11 +207,62 @@ async function checkAssertion(
       } catch {
         return Boolean(await page.evaluate(a.expr));
       }
-    case "text":
-      return (await page.content()).includes(a.contains);
+    case "text": {
+      const html = await page.content();
+      return textAlternatives(a).some((t) => html.includes(t));
+    }
     case "json":
       return true; // las recetas http chequean jsonPath en su propio camino
   }
+}
+
+export interface AssertionResult {
+  ok: boolean;
+  /** SIEMPRE explica qué se esperaba y qué se vio cuando falla (ok=false). */
+  detail: string;
+}
+
+/**
+ * Postcondición con ventana de reintento. Poll hasta `within_ms` (default
+ * DEFAULT_ASSERT_WINDOW) para tolerar confirmadores asíncronos/transitorios. Cuando
+ * falla, arma un detalle accionable: qué se esperaba, cuánto se esperó, y el estado
+ * real de la página (url + título) para distinguir un tool roto de un re-auth/redirect.
+ */
+async function checkAssertion(
+  page: Page,
+  a: SuccessAssertion,
+): Promise<AssertionResult> {
+  if (a.type === "json") return { ok: true, detail: "" };
+
+  const within = a.within_ms ?? DEFAULT_ASSERT_WINDOW;
+  const deadline = Date.now() + within;
+  for (;;) {
+    if (await assertionHolds(page, a)) return { ok: true, detail: "" };
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    await page.waitForTimeout(Math.min(ASSERT_POLL_INTERVAL, left));
+  }
+
+  // Estado real de la página, defensivo (la página puede haberse cerrado/navegado).
+  let url = "";
+  let title = "";
+  try {
+    url = page.url();
+  } catch {
+    /* ignore */
+  }
+  try {
+    title = await page.title();
+  } catch {
+    /* ignore */
+  }
+  const waited = within > 0 ? ` (reintenté ${within}ms)` : "";
+  const detail =
+    `se esperaba ${describeAssertion(a)}, pero no se cumplió${waited}. ` +
+    `Página al fallar: url=${url || "?"} título="${title}". ` +
+    `Si la acción igual ocurrió, la assertion quedó corta (toast transitorio o ` +
+    `wording distinto); si la página es un login, es re-auth, no tool roto.`;
+  return { ok: false, detail };
 }
 
 // --- HTTP path -------------------------------------------------------------------
@@ -267,9 +344,9 @@ export async function run(
       }
 
       // success_assertion (postcondición obligatoria).
-      const ok = await checkAssertion(page, tool.success_assertion);
-      if (!ok) {
-        throw new TypedFail("tool-roto", "success_assertion falló");
+      const check = await checkAssertion(page, tool.success_assertion);
+      if (!check.ok) {
+        throw new TypedFail("tool-roto", `success_assertion falló: ${check.detail}`);
       }
 
       // result_extractor para tools de lectura.

@@ -6,3 +6,12 @@ creds.local.json
 .tool-memory/
 # guía local para el agente — no versionar ni publicar
 CLAUDE.md
+# scratch / artefactos de exploración del browser — no versionar
+.playwright-mcp/
+modal-*.md
+prod-stepper.md
+# guía local de publicación — no versionar
+PUBLISH.md
+# tooling externo de trazas (Python) — no versionar
+webtrace/
+__pycache__/
