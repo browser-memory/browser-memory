@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import ws from "ws";
 
 /**
  * Cliente Supabase con la service-role key: corre server-side y bypassa RLS.
@@ -15,4 +16,7 @@ if (!url || !key) {
 
 export const supabase = createClient(url, key, {
   auth: { persistSession: false, autoRefreshToken: false },
+  // Node 20 no tiene WebSocket nativo (recién en 22); el RealtimeClient que
+  // createClient instancia siempre lo necesita aunque no usemos realtime.
+  realtime: { transport: ws as any },
 });
