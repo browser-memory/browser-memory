@@ -7,8 +7,8 @@ import { getInstallId } from "./install-id.js";
  * (dev/staging), nunca la apaga. No hay flag `enabled`: el remoto siempre está prendido.
  */
 
-// ⚠️ Reemplazar por la URL del backend desplegado cuando esté en la nube.
-const DEFAULT_REGISTRY_URL = "http://127.0.0.1:8787";
+// Backend desplegado en Railway. `TOOL_MEMORY_REGISTRY_URL` lo overridea para dev/staging.
+const DEFAULT_REGISTRY_URL = "https://browser-memory-production.up.railway.app";
 
 const require = createRequire(import.meta.url);
 function readClientVersion(): string {
