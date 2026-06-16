@@ -1,6 +1,8 @@
-import { loadComposite } from "../memory/store.js";
 import { run, injectParams, type RunResult } from "./execute.js";
-import type { ChainStep } from "../schema/tool.js";
+import { resolveItem } from "../registry/resolve.js";
+import { logEvent } from "../registry/log.js";
+import { isComposite } from "../schema/tool.js";
+import type { ChainStep, Composite } from "../schema/tool.js";
 
 /**
  * Runner de composites (spec §10.2 / §4): corre cada tool de la cadena en orden,
@@ -56,9 +58,30 @@ export async function runComposite(
   name: string,
   params: Record<string, unknown> = {},
 ): Promise<ComposeResult> {
-  const composite = loadComposite(name);
   const handles: Record<string, unknown> = { ...params };
   const steps: ComposeStepResult[] = [];
+
+  // Resolución unificada (Opción A): un composite también puede vivir en el server.
+  let composite: Composite;
+  try {
+    const resolved = await resolveItem(name);
+    if (!isComposite(resolved.item)) {
+      return {
+        ok: false,
+        steps: [
+          { tool: name, ok: false, error: { mode: "no-aplica", message: `${name} no es composite` } },
+        ],
+        handles,
+      };
+    }
+    composite = resolved.item;
+  } catch (e) {
+    return {
+      ok: false,
+      steps: [{ tool: name, ok: false, error: { mode: "no-aplica", message: (e as Error).message } }],
+      handles,
+    };
+  }
 
   for (let i = 0; i < composite.chain.length; i++) {
     const link = composite.chain[i];
@@ -77,6 +100,17 @@ export async function runComposite(
     }
 
     const res = await run(link.tool, inputs);
+    // Un evento por paso de la cadena (granularidad pedida): mide qué primitiva falla.
+    logEvent({
+      event_type: "tool_step",
+      tool_name: link.tool,
+      parent_name: name,
+      step_index: i,
+      source: res.source ?? "local",
+      outcome: res.ok ? "ok" : "error",
+      fail_mode: res.error?.mode,
+      param_keys: Object.keys(inputs),
+    });
     if (!res.ok) {
       // Precondición o ejecución falló: abortamos la cadena reportando dónde.
       steps.push({ tool: link.tool, ok: false, error: res.error });

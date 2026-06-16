@@ -8,12 +8,22 @@ import { join } from "node:path";
 import { launchSharedChrome, stopSharedChrome } from "./browser/chrome.js";
 import { disconnectReplay, captureScreenshotsInto } from "./browser/connect.js";
 import { startNetLog, getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
-import { discover } from "./memory/discover.js";
+import {
+  discover,
+  sortCompositesFirst,
+  listSites,
+  mergeSites,
+  forgetSite,
+  type Candidate,
+} from "./memory/discover.js";
 import { loadItem, saveItem, removeItem } from "./memory/store.js";
 import { isComposite } from "./schema/tool.js";
-import { run } from "./runner/execute.js";
-import { runComposite } from "./runner/compose.js";
+import { run, type RunResult } from "./runner/execute.js";
+import { runComposite, type ComposeResult } from "./runner/compose.js";
 import { learn } from "./learn/signal.js";
+import { fetchRemoteIndex, fetchRemoteSites } from "./registry/client.js";
+import { resolveItem, isRemoteSource } from "./registry/resolve.js";
+import { logEvent } from "./registry/log.js";
 
 /**
  * Entry MCP (stdio). Registra discover / run / save (spec §5). Es dueño del ciclo
@@ -80,18 +90,42 @@ server.tool(
       .describe("sitio(s) de la tarea: marca o dominio, ej. ['infobae'] o ['airbnb','booking']"),
   },
   async ({ sites }) => {
-    const candidates = discover(sites).map((c) => {
-      // Completamos los params reales leyendo el item (requires.params o params).
-      try {
-        const item = loadItem(c.name);
-        const params = isComposite(item)
-          ? Object.keys(item.params)
-          : Object.keys(item.requires.params);
-        return { ...c, params };
-      } catch {
-        return c;
-      }
-    });
+    // 1. Remoto (best-effort): el server es la fuente de verdad (oferta curada). El índice
+    //    ya trae los nombres de params, así que no hace falta leer el item.
+    const remoteEntries = await fetchRemoteIndex(sites);
+    const remoteNames = new Set(remoteEntries.map((e) => e.name));
+    const remote: Candidate[] = remoteEntries.map((e) => ({
+      name: e.name,
+      type: e.type,
+      site: e.site,
+      intent: e.intent,
+      params: e.params ?? [],
+      side_effect: e.side_effect,
+      source: "remote" as const,
+    }));
+
+    // 2. Local: SOLO las que el server no tiene. Dedup por name: GANA el server.
+    //    Enriquecemos los params reales leyendo el item (requires.params o params).
+    const local: Candidate[] = discover(sites)
+      .filter((c) => !remoteNames.has(c.name))
+      .map((c) => {
+        try {
+          const item = loadItem(c.name);
+          const params = isComposite(item)
+            ? Object.keys(item.params)
+            : Object.keys(item.requires.params);
+          return { ...c, params };
+        } catch {
+          return c;
+        }
+      });
+
+    const candidates = sortCompositesFirst([...remote, ...local]);
+
+    // "Se quiso hacer algo y no hay tool (ni local ni remoto)": señal de demanda no cubierta.
+    if (candidates.length === 0) {
+      logEvent({ event_type: "discover_miss", sites });
+    }
     // Todo discover marca el INICIO de una tarea nueva: levantamos Chrome (best-effort) y
     // reseteamos+arrancamos el grabador de red SIEMPRE, haya tools o no. Así, aunque el
     // agente corra una tool conocida y DESPUÉS explore una acción nueva en el mismo sitio,
@@ -111,6 +145,50 @@ server.tool(
 );
 
 server.tool(
+  "list_sites",
+  "Lista TODOS los sitios que tienen al menos una tool en memoria — los del registro " +
+    "REMOTO (oferta curada del server) y los LOCALES del usuario, deduplicados por sitio. " +
+    "Usala para responder 'qué sitios soportamos de forma nativa'. NO toca el browser ni " +
+    "necesita params. Cada sitio trae su `source` (local / remote / both) y el conteo de " +
+    "tools de cada lado.",
+  {},
+  async () => {
+    // Remoto best-effort (igual que discover): si el backend está caído, devuelve [].
+    const remote = await fetchRemoteSites();
+    const local = listSites();
+    const sites = mergeSites(local, remote);
+    return {
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ count: sites.length, sites }, null, 2),
+        },
+      ],
+    };
+  },
+);
+
+server.tool(
+  "forget_site",
+  "Borra de la memoria LOCAL todas las tools de un sitio (mismo matching por marca/" +
+    "dominio que discover: 'wikipedia' → es.wikipedia.org). Usala cuando el usuario pida " +
+    "'eliminá X de los sitios disponibles'. Es DIRECTO e IRREVERSIBLE: no hay papelera ni " +
+    "undo — confirmá con el usuario antes de llamarla. NO toca el registro remoto (la " +
+    "oferta curada del server se cura aparte): si el sitio existe solo en remoto, " +
+    "`deleted` vuelve vacío.",
+  {
+    site: z.string().describe("sitio a olvidar: marca o dominio, ej. 'wikipedia' o 'es.wikipedia.org'"),
+  },
+  async ({ site }) => {
+    const res = forgetSite(site);
+    const text = res.deleted.length
+      ? `Borradas ${res.deleted.length} tool(s) locales de '${res.site}': ${res.deleted.join(", ")}.`
+      : `No había tools locales para '${res.site}' (puede existir solo en el registro remoto, que no se toca desde acá).`;
+    return { content: [{ type: "text", text }] };
+  },
+);
+
+server.tool(
   "run",
   "Ejecuta un tool de la memoria de forma determinista (sin modelo en el medio) y " +
     "devuelve DATOS estructurados. Verifica precondiciones de entorno y la " +
@@ -121,16 +199,35 @@ server.tool(
     params: z.record(z.unknown()).optional().describe("params/handles del tool"),
   },
   async ({ name, params }) => {
-    // Despacha al runner correcto según el tipo del item en memoria.
+    // Resolución unificada (Opción A) para decidir el dispatch y conocer el origen.
+    // La cache hace barata esta resolución y la de adentro de run/runComposite.
     let composite = false;
+    let source: "local" | "remote" = "local";
     try {
-      composite = isComposite(loadItem(name));
+      const resolved = await resolveItem(name);
+      composite = isComposite(resolved.item);
+      source = isRemoteSource(resolved.source) ? "remote" : "local";
     } catch {
-      // no existe; run() lo reporta como no-aplica.
+      // no existe en ningún lado; run()/runComposite() lo reportan como no-aplica.
     }
     const res = composite
       ? await runComposite(name, params ?? {})
       : await run(name, params ?? {});
+
+    // tool_run: UN evento por llamada top-level (un composite = 1 acá; sus pasos los
+    // loguea compose.ts como tool_step).
+    logEvent({
+      event_type: "tool_run",
+      tool_name: name,
+      item_type: composite ? "composite" : "primitive",
+      source: !composite && (res as RunResult).source ? (res as RunResult).source! : source,
+      outcome: res.ok ? "ok" : "error",
+      fail_mode: composite
+        ? (res as ComposeResult).steps.find((s) => !s.ok)?.error?.mode
+        : (res as RunResult).error?.mode,
+      param_keys: Object.keys(params ?? {}),
+    });
+
     return {
       content: [{ type: "text", text: JSON.stringify(res, null, 2) }],
       isError: !res.ok,
@@ -160,11 +257,17 @@ server.tool(
     try {
       saved = saveItem(tool);
     } catch (e) {
+      // No logueamos saves fallidos: el log solo guarda lo que funcionó bien.
       return {
         content: [{ type: "text", text: `Inválido: ${(e as Error).message}` }],
         isError: true,
       };
     }
+
+    const itemType = isComposite(saved) ? "composite" : "primitive";
+    const paramKeys = isComposite(saved)
+      ? Object.keys(saved.params)
+      : Object.keys(saved.requires.params);
 
     // Smoke-run: SOLO primitivas de lectura (un write ejecutaría el efecto de verdad).
     if (verify_with && !isComposite(saved) && saved.side_effect === "read") {
@@ -172,6 +275,7 @@ server.tool(
       if (!res.ok || res.result == null) {
         removeItem(saved.name); // revertimos: un tool que no verifica no queda en memoria.
         const why = res.ok ? "el extractor devolvió null/sin dato" : res.error?.message;
+        // No logueamos el rechazo: el log solo guarda lo que funcionó bien.
         return {
           content: [
             {
@@ -185,6 +289,14 @@ server.tool(
           isError: true,
         };
       }
+      logEvent({
+        event_type: "tool_saved",
+        tool_name: saved.name,
+        item_type: itemType,
+        outcome: "ok",
+        param_keys: paramKeys,
+        meta: { version: saved.version, verified: true },
+      });
       return {
         content: [
           {
@@ -195,6 +307,14 @@ server.tool(
       };
     }
 
+    logEvent({
+      event_type: "tool_saved",
+      tool_name: saved.name,
+      item_type: itemType,
+      outcome: "ok",
+      param_keys: paramKeys,
+      meta: { version: saved.version },
+    });
     return {
       content: [
         { type: "text", text: `Guardado: ${saved.name} (${saved.type} v${saved.version})` },

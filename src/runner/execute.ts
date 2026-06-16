@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { withFreshPage } from "../browser/connect.js";
-import { loadTool, saveTool } from "../memory/store.js";
+import { saveTool } from "../memory/store.js";
+import { isComposite } from "../schema/tool.js";
+import { resolveItem, isRemoteSource } from "../registry/resolve.js";
 import type {
   Tool,
   PlaywrightStep,
@@ -20,6 +22,8 @@ export interface RunResult {
   ok: boolean;
   result?: unknown;
   error?: { mode: FailMode; message: string };
+  /** De dónde se resolvió el tool (para el logging). */
+  source?: "local" | "remote";
 }
 
 const DEFAULT_TIMEOUT = 15000;
@@ -307,7 +311,13 @@ async function runHttp(
 
 // --- entrypoint ------------------------------------------------------------------
 
-function bumpHealth(tool: Tool, ok: boolean): void {
+/**
+ * Persiste la salud del tool. NO-OP para tools remotas: la Opción A las mantiene efímeras
+ * (no deben crear el archivo local en tools/); su salud se infiere server-side de los
+ * eventos `tool_run`.
+ */
+function bumpHealth(tool: Tool, ok: boolean, remote: boolean): void {
+  if (remote) return;
   const nowIso = new Date().toISOString();
   const health = ok
     ? { last_ok: nowIso, fail_count: 0 }
@@ -320,20 +330,32 @@ export async function run(
   params: Record<string, unknown> = {},
 ): Promise<RunResult> {
   let tool: Tool;
+  let remote = false;
   try {
-    tool = loadTool(name);
+    // Resolución unificada (Opción A): disco local → cache memoria → pull remoto.
+    const resolved = await resolveItem(name);
+    if (isComposite(resolved.item)) {
+      return {
+        ok: false,
+        error: { mode: "no-aplica", message: `${name} es composite, no primitiva` },
+        source: isRemoteSource(resolved.source) ? "remote" : "local",
+      };
+    }
+    tool = resolved.item;
+    remote = isRemoteSource(resolved.source);
   } catch (e) {
     return {
       ok: false,
       error: { mode: "no-aplica", message: (e as Error).message },
     };
   }
+  const source: "local" | "remote" = remote ? "remote" : "local";
 
   // Camino HTTP: no toca el navegador.
   if (tool.recipe.kind === "http") {
     const res = await runHttp(tool, params);
-    bumpHealth(tool, res.ok);
-    return res;
+    bumpHealth(tool, res.ok, remote);
+    return { ...res, source };
   }
 
   // Camino Playwright: pestaña fresca sobre el Chrome compartido (self-contained).
@@ -356,20 +378,21 @@ export async function run(
       return data;
     });
 
-    bumpHealth(tool, true);
-    return { ok: true, result };
+    bumpHealth(tool, true, remote);
+    return { ok: true, result, source };
   } catch (e) {
     if (e instanceof TypedFail) {
       // Solo tool-roto cuenta como falla de salud: re-auth/no-aplica son del entorno,
       // no del tool, y no deben inflar fail_count ni disparar re-learn.
-      if (e.mode === "tool-roto") bumpHealth(tool, false);
-      return { ok: false, error: { mode: e.mode, message: e.message } };
+      if (e.mode === "tool-roto") bumpHealth(tool, false, remote);
+      return { ok: false, error: { mode: e.mode, message: e.message }, source };
     }
     // Cualquier otra excepción de Playwright => tool-roto (selector/timeout).
-    bumpHealth(tool, false);
+    bumpHealth(tool, false, remote);
     return {
       ok: false,
       error: { mode: "tool-roto", message: (e as Error).message },
+      source,
     };
   }
 }

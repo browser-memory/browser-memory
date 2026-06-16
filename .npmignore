@@ -1,0 +1,11 @@
+# El paquete publica SOLO lo que lista `files` en package.json (dist + README).
+# Este .npmignore es defensa-en-profundidad: el backend remoto NUNCA debe viajar al npm.
+backend/
+test/
+webtrace/
+.playwright-mcp/
+*.md
+!README.md
+src/
+tsconfig.json
+.mcp.json

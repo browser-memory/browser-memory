@@ -1,0 +1,28 @@
+{
+  "name": "browser-memory-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend remoto de browser-memory: registro de tools curadas + logging de uso, sobre Supabase.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.2",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

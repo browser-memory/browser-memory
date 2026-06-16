@@ -1,4 +1,4 @@
-import { listIndex, normalizeSite } from "./store.js";
+import { listIndex, normalizeSite, removeItem } from "./store.js";
 import type { IndexEntry, SideEffect } from "../schema/tool.js";
 
 /**
@@ -23,6 +23,8 @@ export interface Candidate {
   intent: string;
   params: string[];
   side_effect: SideEffect;
+  /** De dónde salió: memoria local del usuario o el registro remoto. */
+  source?: "local" | "remote";
 }
 
 // Partes de dominio que NO identifican a un sitio (TLDs y subdominios genéricos).
@@ -48,7 +50,7 @@ function compositesFirst(a: IndexEntry, b: IndexEntry): number {
   return (b.type === "composite" ? 1 : 0) - (a.type === "composite" ? 1 : 0);
 }
 
-function toCandidate(e: IndexEntry): Candidate {
+export function toCandidate(e: IndexEntry): Candidate {
   return {
     name: e.name,
     type: e.type,
@@ -56,7 +58,91 @@ function toCandidate(e: IndexEntry): Candidate {
     intent: e.intent,
     params: [], // se completa en index.ts leyendo el item (params/requires)
     side_effect: e.side_effect,
+    source: "local",
   };
+}
+
+/** Composites primero, estable (mismo criterio que el discover local). Reutilizable. */
+export function sortCompositesFirst(list: Candidate[]): Candidate[] {
+  return list.sort(
+    (a, b) => (b.type === "composite" ? 1 : 0) - (a.type === "composite" ? 1 : 0),
+  );
+}
+
+/** Resultado de olvidar un sitio: qué se borró de la memoria local. */
+export interface ForgetResult {
+  site: string;
+  deleted: string[];
+}
+
+/**
+ * Borra de la memoria LOCAL todas las tools del sitio pedido (mismo matching por
+ * dominio/marca que `discover`). Es DIRECTO e IRREVERSIBLE: cada `removeItem` borra el
+ * archivo y reindexa. No toca el registro remoto (la oferta curada es compartida y se
+ * cura aparte). Si nada matchea, `deleted` viene vacío.
+ */
+export function forgetSite(site: string): ForgetResult {
+  const deleted = discover([site]).map((c) => c.name);
+  for (const name of deleted) removeItem(name);
+  return { site: normalizeSite(site), deleted };
+}
+
+/** Un sitio con al menos una tool y cuántas tiene (de una fuente). */
+export interface SiteSummary {
+  site: string;
+  count: number;
+}
+
+/**
+ * Sitios que tienen al menos una tool en memoria LOCAL, con el conteo. Agrega el índice
+ * por `site` normalizado (sin esquema/www/path). Composites sin `site` no se cuentan
+ * (no son reconocibles por sitio). Lo usa la tool `list_sites` para responder "qué
+ * sitios soportamos".
+ */
+export function listSites(): SiteSummary[] {
+  const counts = new Map<string, number>();
+  for (const e of listIndex()) {
+    if (!e.site) continue;
+    const site = normalizeSite(e.site);
+    if (!site) continue;
+    counts.set(site, (counts.get(site) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([site, count]) => ({ site, count }));
+}
+
+/** Un sitio soportado y de dónde salen sus tools (local, remoto o ambos). */
+export interface SiteListing {
+  site: string;
+  source: "local" | "remote" | "both";
+  tools: { local: number; remote: number };
+}
+
+/**
+ * Mergea los sitios locales y remotos en una sola lista deduplicada por sitio. Marca el
+ * origen (local / remote / both) y reporta el conteo de cada lado por separado (no los
+ * suma: una misma tool puede estar en los dos). Ordena alfabético. Puro y testeable.
+ */
+export function mergeSites(local: SiteSummary[], remote: SiteSummary[]): SiteListing[] {
+  const map = new Map<string, SiteListing>();
+  const upsert = (rawSite: string, n: number, which: "local" | "remote"): void => {
+    const site = normalizeSite(rawSite);
+    if (!site) return;
+    let entry = map.get(site);
+    if (!entry) {
+      entry = { site, source: which, tools: { local: 0, remote: 0 } };
+      map.set(site, entry);
+    }
+    entry.tools[which] += n;
+    entry.source =
+      entry.tools.local > 0 && entry.tools.remote > 0
+        ? "both"
+        : entry.tools.local > 0
+          ? "local"
+          : "remote";
+  };
+  for (const s of local) upsert(s.site, s.count, "local");
+  for (const s of remote) upsert(s.site, s.count, "remote");
+  return [...map.values()].sort((a, b) => a.site.localeCompare(b.site));
 }
 
 export function discover(sites: string[]): Candidate[] {

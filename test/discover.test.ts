@@ -8,7 +8,9 @@ import { join } from "node:path";
 process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-discover-"));
 
 const { saveTool } = await import("../src/memory/store.ts");
-const { discover } = await import("../src/memory/discover.ts");
+const { discover, listSites, mergeSites, forgetSite } = await import(
+  "../src/memory/discover.ts"
+);
 
 const wikiTool = {
   name: "wikipedia-search",
@@ -115,4 +117,61 @@ test("dominio y marca devuelven lo mismo, sin campo score", () => {
     porMarca.map((c) => c.name).sort(),
   );
   assert.ok(porMarca.every((c) => !("score" in c)), "no debería venir score");
+});
+
+// --- listSites: agrega la memoria local por sitio -------------------------------
+
+test("listSites agrupa por sitio con el conteo de tools", () => {
+  const sites = listSites();
+  const infobae = sites.find((s) => s.site === "infobae.com");
+  const wiki = sites.find((s) => s.site === "es.wikipedia.org");
+  assert.equal(infobae?.count, 2, "infobae tiene portada + login");
+  assert.equal(wiki?.count, 1, "wikipedia tiene una sola tool");
+});
+
+// --- mergeSites: combina local + remoto deduplicando por sitio ------------------
+
+test("mergeSites marca source y no pisa conteos entre fuentes", () => {
+  const merged = mergeSites(
+    [
+      { site: "infobae.com", count: 2 },
+      { site: "wikipedia.org", count: 1 },
+    ],
+    [
+      { site: "https://www.Infobae.com/", count: 5 }, // mismo sitio, sin normalizar
+      { site: "airbnb.com", count: 3 },
+    ],
+  );
+
+  const infobae = merged.find((s) => s.site === "infobae.com");
+  assert.equal(infobae?.source, "both", "infobae está en local y remoto");
+  assert.deepEqual(infobae?.tools, { local: 2, remote: 5 });
+
+  assert.equal(merged.find((s) => s.site === "wikipedia.org")?.source, "local");
+  assert.equal(merged.find((s) => s.site === "airbnb.com")?.source, "remote");
+
+  // Ordenado alfabético.
+  assert.deepEqual(
+    merged.map((s) => s.site),
+    ["airbnb.com", "infobae.com", "wikipedia.org"],
+  );
+});
+
+// --- forgetSite: borra todas las tools locales de un sitio (al final: es destructivo) ---
+
+test("forgetSite borra TODAS las tools del sitio y no toca otros", () => {
+  // Pre: infobae tiene 2 (portada + login), wikipedia tiene 1.
+  const res = forgetSite("infobae");
+  assert.equal(res.site, "infobae"); // eco normalizado del término pedido, no del dominio matcheado
+  assert.deepEqual(res.deleted.sort(), ["infobae-login", "infobae-portada"]);
+
+  // Infobae desaparece; wikipedia sigue intacta.
+  assert.equal(discover(["infobae"]).length, 0);
+  assert.equal(discover(["wikipedia"]).length, 1);
+  assert.ok(!listSites().some((s) => s.site === "infobae.com"));
+});
+
+test("forgetSite de un sitio inexistente no borra nada", () => {
+  const res = forgetSite("sitio-que-no-existe");
+  assert.deepEqual(res.deleted, []);
 });
