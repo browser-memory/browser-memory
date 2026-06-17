@@ -41,6 +41,33 @@ test("discovery matchea el sitio por dominio completo", () => {
   assert.equal(r[0].side_effect, "read");
 });
 
+const xTool = {
+  name: "x-post",
+  site: "x.com",
+  intent: "postear un tweet en x",
+  keywords: ["x", "twitter", "tweet", "postear"],
+  type: "primitive",
+  side_effect: "write-irreversible",
+  requires: { params: { text: "string" }, env: {} },
+  recipe: {
+    kind: "playwright",
+    steps: [{ action: "navigate", url: "https://x.com/compose/post?text={{text}}" }],
+  },
+  success_assertion: { type: "dom", expr: ".tweet" },
+};
+
+saveTool(xTool);
+
+test("matchea un dominio de una sola letra (x.com) por marca, dominio o www", () => {
+  for (const term of ["x", "x.com", "www.x.com", "https://x.com/home"]) {
+    const r = discover([term]);
+    assert.ok(
+      r.some((c) => c.name === "x-post"),
+      `esperaba matchear x-post con "${term}"`,
+    );
+  }
+});
+
 test("un sitio desconocido no matchea", () => {
   const r = discover(["aerolineas-argentinas"]);
   assert.equal(r.length, 0);

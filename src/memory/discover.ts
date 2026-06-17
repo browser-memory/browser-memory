@@ -33,16 +33,17 @@ const GENERIC_DOMAIN_PARTS = new Set([
 ]);
 
 /**
- * Tokens-nombre de un sitio: sus labels significativos, sin TLD ni subdominios
- * genéricos. Ej.: "infobae.com" → ["infobae"], "es.wikipedia.org" → ["wikipedia"],
- * "news.ycombinator.com" → ["news", "ycombinator"]. Length >= 3 descarta ccTLDs
- * y raíces de una/dos letras ("es", "ar", "x") que no identifican nada.
+ * Labels significativos de un sitio: sin esquema/www/path (normalizeSite) y sin partes
+ * genéricas de dominio (TLDs, www, co...). Ej.: "infobae.com" → ["infobae"],
+ * "es.wikipedia.org" → ["es", "wikipedia"], "news.ycombinator.com" → ["news",
+ * "ycombinator"]. NO filtra por largo: así "x.com" → ["x"] y matchea con "x" (dominios
+ * de una letra como Twitter/X). El costo es aceptar ccTLDs cortos como token ("es",
+ * "io"), ruido marginal frente a soportar marcas de una letra.
  */
-function siteNameTokens(site: string): string[] {
-  return site
-    .toLowerCase()
+function siteCoreTokens(site: string): string[] {
+  return normalizeSite(site)
     .split(".")
-    .filter((p) => p.length >= 3 && !GENERIC_DOMAIN_PARTS.has(p));
+    .filter((p) => p && !GENERIC_DOMAIN_PARTS.has(p));
 }
 
 /** Composites primero (§10.2); estable para el resto. */
@@ -146,16 +147,19 @@ export function mergeSites(local: SiteSummary[], remote: SiteSummary[]): SiteLis
 }
 
 export function discover(sites: string[]): Candidate[] {
-  const requested = (sites ?? []).map(normalizeSite).filter(Boolean);
-  if (requested.length === 0) return [];
+  // Reducimos AMBOS lados al "core": el término pedido y el site guardado. Así
+  // "x.com", "www.x.com" y "x" colapsan al token "x" y matchean entre sí.
+  const requestedFull = new Set((sites ?? []).map(normalizeSite).filter(Boolean));
+  const requestedTokens = new Set((sites ?? []).flatMap(siteCoreTokens));
+  if (requestedFull.size === 0) return [];
 
   const matched: IndexEntry[] = [];
   for (const e of listIndex()) {
     if (!e.site) continue; // composites sin site declarado no son reconocibles por sitio
     const site = normalizeSite(e.site); // defensivo: por si quedara un índice sin migrar
     const hit =
-      requested.includes(site) ||
-      siteNameTokens(site).some((t) => requested.includes(t));
+      requestedFull.has(site) ||
+      siteCoreTokens(site).some((t) => requestedTokens.has(t));
     if (hit) matched.push(e);
   }
 

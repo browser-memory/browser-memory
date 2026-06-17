@@ -32,7 +32,20 @@ Admin (header `x-admin-key: $ADMIN_API_KEY`):
 
 ## Curación
 
-Dos vías intercambiables para subir/modificar la oferta:
+Tres vías intercambiables para subir/modificar la oferta:
 - **Supabase Table Editor** (recomendado): editás el JSON de la columna `definition` a mano;
   el trigger recalcula `name/site/type/intent/keywords/side_effect/version` solo.
 - **Endpoints admin**: vía programática (mismo efecto, con validación zod).
+- **`publish.sh`**: sube uno o varios tools al registro via `POST /v1/admin/tools` (upsert
+  por `name`). Lee `ADMIN_API_KEY` de `backend/.env`. Soporta varios archivos a la vez:
+
+  ```bash
+  # desde backend/, sube todos los .json de una carpeta
+  ./publish.sh /Users/gastonfrancois/Downloads/tools/*
+
+  # o los tools locales del cliente
+  ./publish.sh ~/.tool-memory/tools/*.json
+  ```
+
+  El base apunta por default al backend de Railway; overrideable con
+  `TOOL_MEMORY_REGISTRY_URL=...` para dev/staging.
