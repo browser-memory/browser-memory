@@ -1,36 +1,40 @@
 # browser-memory
 
-A local MCP server that gives an agent a **reusable memory of web actions**: the first
-time an action is performed on a site it is *learned* and saved as an executable tool; the
-next time it is *discovered* and *replayed deterministically*, with no model in the loop.
+Give your agent a **reusable memory of web actions**. The first time it does
+something on a site, it *learns* and saves it as a tool. The next time, it
+*replays* that tool deterministically — no exploration, no model in the loop.
 
-## Requirements
+🌐 **[browser-memory.com](https://browser-memory.com/)**
 
-- **Node.js >= 20** (ships with `npx` — check with `node -v`).
-- An MCP host such as **Claude Code**.
-- A browser: the server uses your system **Google Chrome** if present, otherwise it falls
-  back to Playwright's bundled Chromium (see [Linux notes](#linux--ubuntu-notes)).
+## What it does
 
-No clone or build needed — `npx` downloads and runs the server on demand.
+Ask your agent to do something on a website (e.g. *"search cats on Wikipedia"*):
 
-## Quick start (Claude Code)
+- **First time** → memory is empty, so the agent explores the site and captures
+  the path that worked, distilling it into a reusable tool.
+- **Next time** → it finds the saved tool and replays it directly.
 
-The shared-Chrome design needs **two** servers registered together: `browser-memory`
-(replays saved recipes) and `@playwright/mcp` (explores while learning). Add both:
+Memory is local to your machine and starts empty.
+
+## Add to Claude Code
+
+It needs **two** MCP servers together: `browser-memory` (replays saved tools)
+and `@playwright/mcp` (explores while learning). Add both:
 
 ```bash
 claude mcp add --scope user browser-memory -- npx -y browser-memory
 claude mcp add --scope user playwright -- npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9333
 ```
 
-`--scope user` makes them available in every project. Use `--scope project` instead to add
-them only to the current project (writes a committable `.mcp.json`).
+Then run `/mcp` inside Claude Code to confirm both connect.
 
-Then open Claude Code and run `/mcp` to confirm both connect.
+> `--scope user` enables them in every project. Nothing to clone or build —
+> `npx` downloads and runs on demand. Requires **Node.js >= 20** and a browser
+> (uses your system Google Chrome if present, else Playwright's Chromium).
 
-### Alternative: `.mcp.json` by hand
+### Or with a `.mcp.json` file
 
-Works on any version/host — just drop this file in your project (or `~/.claude.json`):
+Drop this in your project (works on any host):
 
 ```json
 {
@@ -47,72 +51,28 @@ Works on any version/host — just drop this file in your project (or `~/.claude
 }
 ```
 
-## Usage
+## Run with npm
 
-Just ask your agent to do something on a website — e.g. *"search cats on wikipedia"*.
+```bash
+npm i browser-memory
+npx browser-memory
+```
 
-- **First time:** memory is empty, so the agent explores with Playwright, then captures the
-  successful path. A background step distills it into a reusable tool.
-- **Next time:** `discover` finds the saved tool and `run` replays it deterministically —
-  no exploration, no model in the loop.
-
-Memory is **local to each machine** and starts empty. Tools learned on one computer don't
-travel automatically; to move them, copy `~/.tool-memory/tools/`.
-
-## How it works
-
-A single Chrome instance (dedicated profile + `--remote-debugging-port`) is shared over CDP.
-Two MCP clients attach to it and see the same state — tabs, DOM and session:
-
-- `@playwright/mcp` (`--cdp-endpoint`) — used to **explore** while learning.
-- `browser-memory` (`connectOverCDP`) — used to **replay** saved recipes.
-
-`browser-memory` owns the Chrome lifecycle and launches it on startup; `@playwright/mcp`
-attaches to the same endpoint.
-
-## MCP tools
-
-- `discover(goal)` → scored candidates with params and side_effect.
-- `run(name, params)` → structured data. Typed errors: `re-auth`, `no-aplica`, `tool-roto`.
-- `save(tool)` → validates and persists a tool.
-- `request(goal, narration, network)` → freezes a trace and returns a distill prompt so a
-  background subagent can turn it into reusable tools.
+The server launches the shared Chrome and listens on stdio for any MCP host.
 
 ## Configuration
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
 | `TOOL_MEMORY_HOME` | `~/.tool-memory` | Where tools, index, traces and the Chrome profile live |
-| `TOOL_MEMORY_CDP_PORT` | `9333` | Remote-debugging port of the shared Chrome (must match the `--cdp-endpoint` passed to `@playwright/mcp`) |
+| `TOOL_MEMORY_CDP_PORT` | `9333` | Remote-debugging port of the shared Chrome (must match `@playwright/mcp`'s `--cdp-endpoint`) |
 | `TOOL_MEMORY_CHROME_BIN` | system Chrome, else Playwright's Chromium | Chrome binary to launch |
+| `TOOL_MEMORY_RESEED` | `1` | Refresh session/auth from your real Chrome on every launch; set `0` to disable |
 
-Secrets are never stored in tools or traces — they live in the persistent Chrome profile.
+On first launch the dedicated profile is seeded from your real Chrome's most-used
+profile, so you start already logged in. Secrets live in that profile — never in
+tools or traces.
 
-## Linux / Ubuntu notes
+## License
 
-If you don't have Google Chrome installed, install Playwright's Chromium and its system
-dependencies once:
-
-```bash
-npx playwright install chromium
-npx playwright install-deps chromium
-```
-
-If the server times out on startup, run it by hand to see the real log:
-
-```bash
-npx -y browser-memory
-# expect: [tool-memory] Chrome compartido lanzado en CDP.
-```
-
-To point at a system Chrome explicitly, set `TOOL_MEMORY_CHROME_BIN` (e.g.
-`/usr/bin/google-chrome`) in the server's `env` block.
-
-## Development
-
-```bash
-npm install
-npm run build
-npm test               # unit tests (no browser)
-npm run smoke          # end-to-end: launches Chrome, discover → run over Wikipedia
-```
+MIT

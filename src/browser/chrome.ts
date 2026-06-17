@@ -15,6 +15,7 @@ import {
   paths,
   resolveChromeBinary,
   realChromeUserDataDir,
+  resolveSeedProfile,
   reseedEnabled,
 } from "../config.js";
 
@@ -61,11 +62,14 @@ function seedProfileIfEmpty(): void {
 
   const srcRoot = realChromeUserDataDir();
   if (!srcRoot) return; // sin Chrome real detectable: arranca vacío.
-  const srcDefault = join(srcRoot, "Default");
-  if (!existsSync(srcDefault)) return;
+  const profile = resolveSeedProfile(srcRoot); // perfil más usado, no siempre "Default".
+  const srcProfile = join(srcRoot, profile);
+  if (!existsSync(srcProfile)) return;
 
   mkdirSync(paths.chromeProfile, { recursive: true });
-  cpSync(srcDefault, dstDefault, {
+  // El perfil elegido (ej. "Profile 2") se copia SIEMPRE al "Default" del dir dedicado,
+  // que es el que Chrome usa al arrancar con --user-data-dir sin --profile-directory.
+  cpSync(srcProfile, dstDefault, {
     recursive: true,
     filter: (src) => !CACHE_DIRS.has(basename(src)),
   });
@@ -75,19 +79,19 @@ function seedProfileIfEmpty(): void {
   }
   disableSessionRestore();
   process.stderr.write(
-    `[tool-memory] Perfil sembrado desde ${srcRoot} (cuentas logueadas, sin cachés).\n`,
+    `[tool-memory] Perfil "${profile}" sembrado desde ${srcRoot} (cuentas logueadas, sin cachés).\n`,
   );
 }
 
-/** Archivos (no-dir) de sesión/auth que refrescamos en cada re-seed. */
-const AUTH_FILES = [
-  "Cookies",
-  "Cookies-journal",
-  "Login Data",
-  "Login Data-journal",
-  "Web Data",
-  "Web Data-journal",
-];
+/**
+ * Bases de archivos SQLite de sesión/auth que refrescamos en cada re-seed. Por cada
+ * base copiamos también sus sidecars (-wal, -shm, -journal): con el Chrome real ABIERTO
+ * las cookies recién escritas viven en el -wal todavía sin volcar, así que copiar solo
+ * el archivo principal daría una foto atrasada. Copiar los tres juntos preserva el estado.
+ */
+const AUTH_BASES = ["Cookies", "Login Data", "Web Data"];
+const SQLITE_SIDECARS = ["", "-wal", "-shm", "-journal"];
+const AUTH_FILES = AUTH_BASES.flatMap((b) => SQLITE_SIDECARS.map((s) => b + s));
 /** Directorios de sesión/auth (cookies modernas viven en Network/). */
 const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
 
@@ -101,16 +105,19 @@ const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
 function reseedAuth(): void {
   const srcRoot = realChromeUserDataDir();
   if (!srcRoot) return;
-  const srcDefault = join(srcRoot, "Default");
+  const profile = resolveSeedProfile(srcRoot); // mismo perfil que el seed inicial.
+  const srcProfile = join(srcRoot, profile);
   const dstDefault = join(paths.chromeProfile, "Default");
-  if (!existsSync(srcDefault) || !existsSync(dstDefault)) return;
+  if (!existsSync(srcProfile) || !existsSync(dstDefault)) return;
 
   for (const f of AUTH_FILES) {
-    const src = join(srcDefault, f);
-    if (existsSync(src)) cpSync(src, join(dstDefault, f));
+    const src = join(srcProfile, f);
+    const dst = join(dstDefault, f);
+    if (existsSync(src)) cpSync(src, dst);
+    else rmSync(dst, { force: true }); // si el real ya no tiene el sidecar, no dejes el viejo
   }
   for (const d of AUTH_DIRS) {
-    const src = join(srcDefault, d);
+    const src = join(srcProfile, d);
     if (!existsSync(src)) continue;
     const dst = join(dstDefault, d);
     rmSync(dst, { recursive: true, force: true }); // evita mezclar leveldb viejo/nuevo
@@ -121,7 +128,9 @@ function reseedAuth(): void {
     cpSync(localState, join(paths.chromeProfile, "Local State")); // coherencia de cifrado
   }
   disableSessionRestore();
-  process.stderr.write(`[tool-memory] Auth re-sembrada desde ${srcRoot}.\n`);
+  process.stderr.write(
+    `[tool-memory] Auth re-sembrada (perfil "${profile}") desde ${srcRoot}.\n`,
+  );
 }
 
 /**
