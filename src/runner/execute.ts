@@ -154,7 +154,42 @@ async function runPlaywrightStep(
       }
       return;
     }
+    case "upload": {
+      // Sube archivo(s) a un <input type=file> (ej. la imagen de un tweet). `value` es
+      // la(s) ruta(s) local(es), separadas por '\n', y admite {{param}}. setInputFiles
+      // funciona aun con el input oculto (X lo esconde detrás del botón de media).
+      const paths = injectParams(step.value ?? "", params)
+        .split("\n")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      await page.setInputFiles(injectParams(step.selector!, params), paths, {
+        timeout,
+      });
+      return;
+    }
   }
+}
+
+/**
+ * ¿Hay que OMITIR este paso? Solo los marcados `optional` que referencian un {{param}}
+ * no provisto: ese es el mecanismo para pasos que dependen de un input opcional (ej.
+ * subir una imagen). Un paso no-opcional con un param faltante NO se saltea: deja que
+ * injectParams tire el error y el run falle como corresponde.
+ */
+export function skipOptionalStep(
+  step: PlaywrightStep,
+  params: Record<string, unknown>,
+): boolean {
+  if (!step.optional) return false;
+  for (const text of [step.url, step.selector, step.value, step.expr]) {
+    if (!text) continue;
+    try {
+      injectParams(text, params);
+    } catch {
+      return true; // falta un param del paso opcional → lo salteamos
+    }
+  }
+  return false;
 }
 
 class TypedFail extends Error {
@@ -362,6 +397,7 @@ export async function run(
   try {
     const result = await withFreshPage(async (page) => {
       for (const step of tool.recipe.kind === "playwright" ? tool.recipe.steps : []) {
+        if (skipOptionalStep(step, params)) continue;
         await runPlaywrightStep(page, step, params);
       }
 

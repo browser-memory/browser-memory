@@ -146,22 +146,45 @@ export function mergeSites(local: SiteSummary[], remote: SiteSummary[]): SiteLis
   return [...map.values()].sort((a, b) => a.site.localeCompare(b.site));
 }
 
-export function discover(sites: string[]): Candidate[] {
-  // Reducimos AMBOS lados al "core": el término pedido y el site guardado. Así
-  // "x.com", "www.x.com" y "x" colapsan al token "x" y matchean entre sí.
+/**
+ * Compila el criterio de match POR SITIO de una request (lista de sitios pedidos) en un
+ * predicado reusable. Reduce AMBOS lados al "core": el término pedido y el site comparado.
+ * Así "x.com", "www.x.com" y "x" colapsan al token "x" y matchean entre sí. Es la ÚNICA
+ * fuente de verdad del match por sitio: la comparten el discover local (sobre el índice en
+ * disco) y la resolución de sitios remotos (`matchRemoteSites`). Si no se pidió ningún
+ * sitio el predicado es siempre falso.
+ */
+export function siteMatcher(sites: string[]): (rawSite: string) => boolean {
   const requestedFull = new Set((sites ?? []).map(normalizeSite).filter(Boolean));
   const requestedTokens = new Set((sites ?? []).flatMap(siteCoreTokens));
-  if (requestedFull.size === 0) return [];
-
-  const matched: IndexEntry[] = [];
-  for (const e of listIndex()) {
-    if (!e.site) continue; // composites sin site declarado no son reconocibles por sitio
-    const site = normalizeSite(e.site); // defensivo: por si quedara un índice sin migrar
-    const hit =
+  if (requestedFull.size === 0) return () => false;
+  return (rawSite: string): boolean => {
+    const site = normalizeSite(rawSite);
+    if (!site) return false;
+    return (
       requestedFull.has(site) ||
-      siteCoreTokens(site).some((t) => requestedTokens.has(t));
-    if (hit) matched.push(e);
-  }
+      siteCoreTokens(site).some((t) => requestedTokens.has(t))
+    );
+  };
+}
 
+/**
+ * Dado el término pedido y una lista de sitios CANDIDATOS (ej. los sitios del registro
+ * remoto, vía `fetchRemoteSites`), devuelve qué sitios candidatos matchean — MISMO criterio
+ * que el discover local: dominio completo normalizado o intersección de tokens core
+ * ("x" ↔ "x.com"). El server remoto filtra por sitio EXACTO (no tokeniza), así que esto le
+ * traduce el término pedido a los nombres de sitio reales antes de pedir el índice. Devuelve
+ * sitios normalizados y deduplicados.
+ */
+export function matchRemoteSites(sites: string[], candidates: string[]): string[] {
+  const matches = siteMatcher(sites);
+  const out = new Set<string>();
+  for (const c of candidates) if (matches(c)) out.add(normalizeSite(c));
+  return [...out];
+}
+
+export function discover(sites: string[]): Candidate[] {
+  const matches = siteMatcher(sites);
+  const matched = listIndex().filter((e) => e.site && matches(e.site));
   return matched.sort(compositesFirst).map(toCandidate);
 }

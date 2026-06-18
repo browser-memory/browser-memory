@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { injectParams } = await import("../src/runner/execute.ts");
+const { injectParams, skipOptionalStep } = await import("../src/runner/execute.ts");
 
 test("injectParams sustituye {{q}} en una URL", () => {
   const out = injectParams("https://x.com/s?q={{q}}&n={{n}}", { q: "gatos", n: 5 });
@@ -33,4 +33,25 @@ test("injectParams aplica encode/lower/upper", () => {
 
 test("injectParams lanza con un filtro desconocido", () => {
   assert.throws(() => injectParams("{{q|nope}}", { q: "x" }), /Filtro desconocido/);
+});
+
+test("skipOptionalStep saltea un paso opcional cuyo param no llegó", () => {
+  const step = {
+    action: "upload" as const,
+    selector: "[data-testid=fileInput]",
+    value: "{{image}}",
+    optional: true,
+  };
+  assert.equal(skipOptionalStep(step, {}), true);
+  assert.equal(skipOptionalStep(step, { image: "/tmp/foto.png" }), false);
+});
+
+test("skipOptionalStep nunca saltea un paso NO opcional", () => {
+  const step = {
+    action: "type" as const,
+    selector: "[data-testid=tweetTextarea_0]",
+    value: "{{text}}",
+  };
+  // sin optional:true, no se saltea aunque falte el param (injectParams fallará en el run).
+  assert.equal(skipOptionalStep(step, {}), false);
 });

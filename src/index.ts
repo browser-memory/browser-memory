@@ -10,6 +10,7 @@ import { disconnectReplay, captureScreenshotsInto } from "./browser/connect.js";
 import { startNetLog, getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
 import {
   discover,
+  matchRemoteSites,
   sortCompositesFirst,
   listSites,
   mergeSites,
@@ -92,7 +93,20 @@ server.tool(
   async ({ sites }) => {
     // 1. Remoto (best-effort): el server es la fuente de verdad (oferta curada). El índice
     //    ya trae los nombres de params, así que no hace falta leer el item.
-    const remoteEntries = await fetchRemoteIndex(sites);
+    //    El server filtra por sitio EXACTO (no tokeniza), así que primero traducimos el
+    //    término pedido a los nombres de sitio reales del registro: pedimos la lista de
+    //    sitios remotos y la matcheamos con el MISMO criterio que el discover local
+    //    (`matchRemoteSites`), para que "x" resuelva a "x.com" igual que en memoria local.
+    //    Si la lista de sitios no trae match (backend caído → [], o nada matchea), caemos
+    //    al término crudo: comportamiento previo, sin regresión.
+    const remoteSiteList = await fetchRemoteSites();
+    const remoteTargets = matchRemoteSites(
+      sites,
+      remoteSiteList.map((s) => s.site),
+    );
+    const remoteEntries = await fetchRemoteIndex(
+      remoteTargets.length ? remoteTargets : sites,
+    );
     const remoteNames = new Set(remoteEntries.map((e) => e.name));
     const remote: Candidate[] = remoteEntries.map((e) => ({
       name: e.name,

@@ -1,5 +1,6 @@
 import { registryConfig } from "./config.js";
 import { parseMemoryItem, type MemoryItem, type SideEffect } from "../schema/tool.js";
+import { normalizeSite } from "../memory/store.js";
 
 /**
  * Cliente HTTP fino sobre `fetch` nativo (mismo patrón que execute.ts:runHttp). Todo es
@@ -35,7 +36,10 @@ function warn(msg: string): void {
 /** Índice remoto de las tools de esos sitios. `[]` ante cualquier fallo. */
 export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntry[]> {
   try {
-    const q = encodeURIComponent(sites.join(","));
+    // Normalizamos igual que el discovery local (sin esquema/www/path y en minúsculas)
+    // para que el match remoto sea case-insensitive: "INFOBAE" == "infobae".
+    const normalized = sites.map(normalizeSite).filter(Boolean);
+    const q = encodeURIComponent(normalized.join(","));
     const res = await fetch(url(`/v1/registry/index?sites=${q}`), {
       headers: headers(),
       signal: AbortSignal.timeout(registryConfig.timeoutMs),

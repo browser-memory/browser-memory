@@ -29,6 +29,7 @@ export const PlaywrightStep = z.object({
     "fill",
     "press",
     "wait_for",
+    "upload",
   ]),
   url: z.string().optional(),
   selector: z.string().optional(),
@@ -37,6 +38,12 @@ export const PlaywrightStep = z.object({
   expr: z.string().optional(),
   /** Timeout puntual en ms (default razonable en el runner). */
   timeoutMs: z.number().int().positive().optional(),
+  /**
+   * Si true, el paso se OMITE cuando algún {{param}} que referencia no fue provisto.
+   * Sirve para pasos que dependen de un param OPCIONAL (ej. subir una imagen a un
+   * tweet): con el param presente el paso corre, sin él se saltea sin romper el tool.
+   */
+  optional: z.boolean().optional(),
 });
 export type PlaywrightStep = z.infer<typeof PlaywrightStep>;
 

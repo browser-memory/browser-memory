@@ -8,9 +8,8 @@ import { join } from "node:path";
 process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-discover-"));
 
 const { saveTool } = await import("../src/memory/store.ts");
-const { discover, listSites, mergeSites, forgetSite } = await import(
-  "../src/memory/discover.ts"
-);
+const { discover, matchRemoteSites, listSites, mergeSites, forgetSite } =
+  await import("../src/memory/discover.ts");
 
 const wikiTool = {
   name: "wikipedia-search",
@@ -144,6 +143,44 @@ test("dominio y marca devuelven lo mismo, sin campo score", () => {
     porMarca.map((c) => c.name).sort(),
   );
   assert.ok(porMarca.every((c) => !("score" in c)), "no debería venir score");
+});
+
+test("el match por sitio es case-insensitive: INFOBAE == infobae", () => {
+  const enMayus = discover(["INFOBAE"]);
+  const enMinus = discover(["infobae"]);
+  assert.deepEqual(
+    enMayus.map((c) => c.name).sort(),
+    enMinus.map((c) => c.name).sort(),
+    "MAYÚSCULAS y minúsculas deberían traer las mismas tools",
+  );
+  assert.ok(enMayus.length > 0, "INFOBAE debería matchear");
+});
+
+// --- matchRemoteSites: traduce el término pedido a sitios remotos exactos --------
+
+test("matchRemoteSites resuelve token, dominio y www al sitio remoto (x → x.com)", () => {
+  const remotos = ["x.com", "linkedin.com", "reddit.com"];
+  for (const term of ["x", "x.com", "www.x.com", "X", "https://x.com/home"]) {
+    assert.deepEqual(
+      matchRemoteSites([term], remotos),
+      ["x.com"],
+      `esperaba que "${term}" resolviera a x.com`,
+    );
+  }
+});
+
+test("matchRemoteSites devuelve [] si ningún sitio remoto matchea", () => {
+  assert.deepEqual(matchRemoteSites(["airbnb"], ["x.com", "linkedin.com"]), []);
+  assert.deepEqual(matchRemoteSites([], ["x.com"]), []);
+  assert.deepEqual(matchRemoteSites(["x"], []), []);
+});
+
+test("matchRemoteSites dedup y normaliza los candidatos remotos", () => {
+  const out = matchRemoteSites(
+    ["wikipedia"],
+    ["es.wikipedia.org", "https://es.Wikipedia.org/", "en.wikipedia.org"],
+  );
+  assert.deepEqual(out.sort(), ["en.wikipedia.org", "es.wikipedia.org"]);
 });
 
 // --- listSites: agrega la memoria local por sitio -------------------------------
