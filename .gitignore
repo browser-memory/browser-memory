@@ -9,7 +9,10 @@ CLAUDE.md
 # scratch / artefactos de exploración del browser — no versionar
 .playwright-mcp/
 modal-*.md
+snap-*.md
 prod-stepper.md
+# wiring local de Claude Code (MCP) — config propia, no pública
+.mcp.json
 # guía local de publicación — no versionar
 PUBLISH.md
 # tooling externo de trazas (Python) — no versionar
