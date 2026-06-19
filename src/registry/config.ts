@@ -8,8 +8,8 @@ import { readApiKey } from "./credentials.js";
  * (dev/staging), nunca la apaga. No hay flag `enabled`: el remoto siempre está prendido.
  */
 
-// Backend desplegado en Railway. `TOOL_MEMORY_REGISTRY_URL` lo overridea para dev/staging.
-const DEFAULT_REGISTRY_URL = "https://browser-memory-production.up.railway.app";
+// Backend de producción (dominio propio). `TOOL_MEMORY_REGISTRY_URL` lo overridea para dev/staging.
+const DEFAULT_REGISTRY_URL = "https://api.browser-memory.com";
 
 const require = createRequire(import.meta.url);
 function readClientVersion(): string {
