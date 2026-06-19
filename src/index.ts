@@ -34,6 +34,7 @@ import {
   attemptDeviceLogin,
   type DeviceLoginOutcome,
 } from "./registry/device-auth.js";
+import { runCli } from "./cli.js";
 
 /**
  * Entry MCP (stdio). Registra discover / run / save (spec §5). Es dueño del ciclo
@@ -511,6 +512,13 @@ server.tool(
 );
 
 async function main(): Promise<void> {
+  // CLI de configuración: si hay argumentos posicionales (`config ...`, `help`), los maneja
+  // y NO levanta el MCP server. Sin argumentos (como lo invoca el host MCP) sigue de largo.
+  const argv = process.argv.slice(2);
+  if (argv.length > 0) {
+    runCli(argv);
+    return;
+  }
   // tool-memory es dueño del Chrome pero NO lo levanta al arrancar: lo hace lazy,
   // recién cuando hace falta de verdad (un run, o un discover sin resultado que va a
   // derivar en exploración). Así conectar el MCP / mandar un "hola" no abre nada.

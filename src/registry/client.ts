@@ -76,6 +76,7 @@ function warn(msg: string): void {
 
 /** Índice remoto de las tools de esos sitios. `[]` ante cualquier fallo. */
 export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntry[]> {
+  if (!registryConfig.enabled) return [];
   try {
     // Normalizamos igual que el discovery local (sin esquema/www/path y en minúsculas)
     // para que el match remoto sea case-insensitive: "INFOBAE" == "infobae".
@@ -107,6 +108,7 @@ export interface RemoteSiteEntry {
 
 /** Sitios remotos que tienen al menos una tool curada. `[]` ante cualquier fallo. */
 export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
+  if (!registryConfig.enabled) return [];
   try {
     const res = await fetch(url(`/v1/registry/sites`), {
       headers: headers(),
@@ -128,6 +130,7 @@ export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
 
 /** Baja el definition COMPLETO de una tool y lo valida. `null` ante fallo o 404. */
 export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> {
+  if (!registryConfig.enabled) return null;
   try {
     const res = await fetch(url(`/v1/registry/tool/${encodeURIComponent(name)}`), {
       headers: headers(),
@@ -151,6 +154,7 @@ export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> 
 
 /** POST de un evento de uso. Best-effort: traga todo error, nunca bloquea de verdad. */
 export async function postEvent(payload: Record<string, unknown>): Promise<void> {
+  if (!registryConfig.enabled) return;
   try {
     await fetch(url(`/v1/events`), {
       method: "POST",

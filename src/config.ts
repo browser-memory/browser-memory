@@ -1,14 +1,19 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
+import { cfg, truthy } from "./settings.js";
 
 /**
  * Rutas y parámetros globales del sistema.
  *
  * La memoria es global (no por-proyecto): un tool de un sitio sirve en cualquier
  * contexto. Vive en ~/.tool-memory/ salvo override por env (útil para tests).
+ *
+ * Toda la config se resuelve con `cfg()` (env var > config.json > default; ver settings.ts),
+ * incluido `ROOT` (el dir de DATOS). El config.json en sí vive anclado a env-o-default (no
+ * a este `home`), así que setear `home` reubica los datos sin mover el propio config.json.
  */
-const ROOT = process.env.TOOL_MEMORY_HOME ?? join(homedir(), ".tool-memory");
+const ROOT = cfg("TOOL_MEMORY_HOME") ?? join(homedir(), ".tool-memory");
 
 export const paths = {
   root: ROOT,
@@ -25,7 +30,7 @@ export const paths = {
 };
 
 /** Puerto del remote-debugging del Chrome compartido. */
-export const cdpPort = Number(process.env.TOOL_MEMORY_CDP_PORT ?? 9333);
+export const cdpPort = Number(cfg("TOOL_MEMORY_CDP_PORT") ?? 9333);
 
 /**
  * Cada vez que se LANZA el Chrome (una vez por sesión, lazy) refrescamos los archivos
@@ -34,9 +39,7 @@ export const cdpPort = Number(process.env.TOOL_MEMORY_CDP_PORT ?? 9333);
  * usuario levante su browser con las sesiones al día sin configurar nada; apagalo con
  * TOOL_MEMORY_RESEED=0. Para cookies 100% frescas conviene tener el Chrome real cerrado.
  */
-export const reseedEnabled = !["0", "false", "no"].includes(
-  (process.env.TOOL_MEMORY_RESEED ?? "").toLowerCase(),
-);
+export const reseedEnabled = truthy(cfg("TOOL_MEMORY_RESEED"), true);
 
 /** Endpoint CDP al que se atachan tanto el runner como @playwright/mcp. */
 export const cdpEndpoint = `http://127.0.0.1:${cdpPort}`;
@@ -52,7 +55,8 @@ function firstExisting(candidates: string[]): string | undefined {
  * chromium que trae Playwright. Override con TOOL_MEMORY_CHROME_BIN.
  */
 export function resolveChromeBinary(): string | undefined {
-  if (process.env.TOOL_MEMORY_CHROME_BIN) return process.env.TOOL_MEMORY_CHROME_BIN;
+  const override = cfg("TOOL_MEMORY_CHROME_BIN");
+  if (override) return override;
   const home = homedir();
   let candidates: string[] = [];
   if (process.platform === "darwin") {
@@ -93,7 +97,8 @@ export function resolveChromeBinary(): string | undefined {
  * Override con TOOL_MEMORY_SEED_FROM. Devuelve undefined si no se encuentra.
  */
 export function realChromeUserDataDir(): string | undefined {
-  if (process.env.TOOL_MEMORY_SEED_FROM) return process.env.TOOL_MEMORY_SEED_FROM;
+  const override = cfg("TOOL_MEMORY_SEED_FROM");
+  if (override) return override;
   const home = homedir();
   let candidates: string[] = [];
   if (process.platform === "darwin") {
@@ -124,7 +129,7 @@ export function realChromeUserDataDir(): string | undefined {
  * hay info. Override explícito con TOOL_MEMORY_PROFILE.
  */
 export function resolveSeedProfile(srcRoot: string): string {
-  const override = process.env.TOOL_MEMORY_PROFILE;
+  const override = cfg("TOOL_MEMORY_PROFILE");
   if (override && existsSync(join(srcRoot, override))) return override;
   try {
     const localState = JSON.parse(

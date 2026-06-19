@@ -31,8 +31,17 @@ You can use browser-memory in two ways — they combine freely:
 
 - **Server (shared registry).** browser-memory can also pull ready-made tools
   from a remote registry, so your agent starts with actions other people
-  already figured out instead of learning every site from scratch. Point it at
-  any registry with `TOOL_MEMORY_REGISTRY_URL` (see [Configuration](#configuration)).
+  already figured out instead of learning every site from scratch. It's **off by
+  default** (fully local). Turn it on, and optionally point it at any registry —
+  yours, a team's, dev/staging:
+
+  ```bash
+  npx browser-memory config server on                                # enable the remote registry
+  npx browser-memory config set-url https://my-registry.example.com  # (optional) use another registry
+  npx browser-memory config server off                               # back to 100% local
+  ```
+
+  See [Configuration](#configuration).
 
 In both cases the browser, the replay engine, and your local memory stay on your
 machine — the registry only serves tool *definitions*.
@@ -87,13 +96,49 @@ The server launches the shared Chrome and listens on stdio for any MCP host.
 
 ## Configuration
 
+The `config` CLI configures the remote registry. It persists to
+`~/.tool-memory/config.json`, so you set it once and every run picks it up:
+
+```bash
+npx browser-memory config show                                     # current config + where each value comes from
+npx browser-memory config server on|off                            # enable/disable the remote registry (default: off)
+npx browser-memory config set-url https://my-registry.example.com  # point at another registry
+npx browser-memory config set home /path/to/data                   # move where your memory lives
+npx browser-memory config reset                                    # wipe persisted config
+```
+
+| Key | Env var | Default | Purpose |
+| --- | --- | --- | --- |
+| `registry-enabled` | `TOOL_MEMORY_REGISTRY_ENABLED` | `off` | Whether to use the remote registry. Off = fully local: no pulls, no telemetry. Shortcut: `config server on\|off` |
+| `registry-url` | `TOOL_MEMORY_REGISTRY_URL` | built-in registry | Which registry to pull from (your own, a team's, dev/staging) |
+| `home` | `TOOL_MEMORY_HOME` | `~/.tool-memory` | Where your tools, index, traces and the Chrome profile live. Changing it relocates your data for future runs (existing data isn't moved for you); the `config.json` itself stays at the default location |
+
+These are also overridable with their environment variable (handy for CI or your
+`.mcp.json` `env` block). **Precedence: env var > `config.json` > default.**
+
+### Use the hosted browser-memory registry
+
+The remote registry is off by default. To turn it on and point it at the hosted
+browser-memory registry, run:
+
+```bash
+npx browser-memory config server on
+npx browser-memory config set-url https://api.browser-memory.com
+```
+
+### Advanced (environment variables)
+
+These aren't exposed by the `config` CLI to keep its surface small, but you can
+still set them via env var (or by hand-editing `config.json`):
+
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `TOOL_MEMORY_HOME` | `~/.tool-memory` | Where your tools, index, traces and the Chrome profile live |
 | `TOOL_MEMORY_CDP_PORT` | `9333` | Remote-debugging port of the shared Chrome (must match `@playwright/mcp`'s `--cdp-endpoint`) |
 | `TOOL_MEMORY_CHROME_BIN` | system Chrome, else Playwright's Chromium | Chrome binary to launch |
 | `TOOL_MEMORY_RESEED` | `1` | Refresh session/auth from your real Chrome on every launch; set `0` to disable |
-| `TOOL_MEMORY_REGISTRY_URL` | built-in registry | Point at a different shared registry (your own, a team's, dev/staging) |
+| `TOOL_MEMORY_PROFILE` | most-used (auto) | Chrome profile to seed from (e.g. `"Default"`, `"Profile 2"`) |
+| `TOOL_MEMORY_SEED_FROM` | auto per platform | Real Chrome `user-data-dir` to copy sessions from |
+| `TOOL_MEMORY_REGISTRY_TIMEOUT_MS` | `3000` | Per-request timeout against the remote registry (ms) |
 
 On first launch the dedicated profile is seeded from your real Chrome's most-used
 profile, so you start already logged in.
