@@ -19,6 +19,8 @@ export const paths = {
   creds: join(ROOT, "creds.local.json"),
   // auth: la API key del registry remoto (una por usuario), escrita por el device-code login.
   auth: join(ROOT, "credentials.json"),
+  // pendingDevice: device-code en curso (entre el 1er 401 y la autorización), efímero.
+  pendingDevice: join(ROOT, "pending-device.json"),
   chromeProfile: join(ROOT, "chrome-profile"),
 };
 

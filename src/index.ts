@@ -30,7 +30,10 @@ import {
 } from "./registry/client.js";
 import { resolveItem, isRemoteSource, type Resolved } from "./registry/resolve.js";
 import { logEvent } from "./registry/log.js";
-import { login } from "./registry/device-auth.js";
+import {
+  attemptDeviceLogin,
+  type DeviceLoginOutcome,
+} from "./registry/device-auth.js";
 
 /**
  * Entry MCP (stdio). Registra discover / run / save (spec §5). Es dueño del ciclo
@@ -88,6 +91,21 @@ function rateLimitNotice(e: RegistryRateLimitError): string {
   return `Límite de uso del registro remoto alcanzado.${when} Por ahora solo tools locales.`;
 }
 
+/**
+ * Mensaje al agente cuando hace falta loguearse (no bloqueante): le pasamos el LINK para que
+ * el usuario autorice y le decimos que reintente. La key se reclama sola en el reintento.
+ */
+function loginNotice(o: Exclude<DeviceLoginOutcome, { status: "authorized" }>): string {
+  if (o.status === "unavailable") {
+    return "No pude iniciar sesión con el registro remoto (¿server caído?). Por ahora solo tools locales.";
+  }
+  const code = o.userCode ? ` (código ${o.userCode})` : "";
+  return (
+    `Necesitás loguearte para usar las tools remotas: abrí ${o.verificationUrl} y autorizá${code}. ` +
+    `Después volvé a pedir lo mismo y se conecta solo.`
+  );
+}
+
 /** Carga los candidatos REMOTOS de los sitios pedidos (sitios → índice → Candidate[]). */
 async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
   // El server filtra por sitio EXACTO: traducimos el término al nombre real (matchRemoteSites).
@@ -111,9 +129,10 @@ async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
 }
 
 /**
- * Resuelve los candidatos remotos manejando el gating: 401 → dispara login device-code y
- * reintenta UNA vez; si no hay key, sigue sin remoto + notice. 429 → sin remoto + notice.
- * Nunca lanza: las tools LOCALES siempre se devuelven igual.
+ * Resuelve los candidatos remotos manejando el gating (NO bloqueante): 401 → intenta avanzar
+ * el device-login; si ya autorizó, reintenta y devuelve remoto; si está pendiente, vuelve sin
+ * remoto + notice con el LINK. 429 → sin remoto + notice. Nunca lanza: las tools LOCALES
+ * siempre se devuelven igual.
  */
 async function remoteCandidatesGated(
   sites: string[],
@@ -122,23 +141,18 @@ async function remoteCandidatesGated(
     return { remote: await loadRemoteCandidates(sites) };
   } catch (e) {
     if (e instanceof RegistryAuthError) {
-      const ok = await login();
-      if (ok) {
+      const outcome = await attemptDeviceLogin();
+      if (outcome.status === "authorized") {
         try {
           return { remote: await loadRemoteCandidates(sites) };
         } catch (e2) {
           if (e2 instanceof RegistryRateLimitError) {
             return { remote: [], notice: rateLimitNotice(e2) };
           }
-          // otro error tras loguear: degradamos a solo-local.
-          return { remote: [] };
+          return { remote: [] }; // otro error tras loguear: degradamos a solo-local.
         }
       }
-      return {
-        remote: [],
-        notice:
-          "Login requerido para tools remotas: autorizá el dispositivo (ver la URL en la terminal). Por ahora solo tools locales.",
-      };
+      return { remote: [], notice: loginNotice(outcome) };
     }
     if (e instanceof RegistryRateLimitError) {
       return { remote: [], notice: rateLimitNotice(e) };
@@ -148,18 +162,36 @@ async function remoteCandidatesGated(
 }
 
 /**
- * resolveItem, pero ante un 401 dispara el login device-code y reintenta una vez. Si el
- * login no consigue key, re-lanza el RegistryAuthError; el 429 y el "no existe" se propagan
- * tal cual para que el handler de run decida.
+ * resolveItem manejando el gating (NO bloqueante). Devuelve el item resuelto, o un `notice`
+ * (login pendiente / límite) para que el handler de run corte mostrándolo. Re-lanza el "no
+ * existe" para que run() lo reporte como no-aplica.
  */
-async function resolveOrLogin(name: string): Promise<Resolved> {
+async function resolveWithGate(
+  name: string,
+): Promise<{ resolved?: Resolved; notice?: string }> {
   try {
-    return await resolveItem(name);
+    return { resolved: await resolveItem(name) };
   } catch (e) {
-    if (e instanceof RegistryAuthError && (await login())) {
-      return await resolveItem(name); // ya hay key (o la tool cae a local).
+    if (e instanceof RegistryAuthError) {
+      const outcome = await attemptDeviceLogin();
+      if (outcome.status === "authorized") {
+        try {
+          return { resolved: await resolveItem(name) };
+        } catch (e2) {
+          if (e2 instanceof RegistryRateLimitError) return { notice: rateLimitNotice(e2) };
+          if (e2 instanceof RegistryAuthError) {
+            return {
+              notice:
+                "Te autoricé pero el registro sigue rechazando la key. Reintentá o regenerá la key en /app.",
+            };
+          }
+          throw e2; // "no existe"
+        }
+      }
+      return { notice: loginNotice(outcome) };
     }
-    throw e;
+    if (e instanceof RegistryRateLimitError) return { notice: rateLimitNotice(e) };
+    throw e; // "no existe" → run()/runComposite() lo reportan como no-aplica.
   }
 }
 
@@ -307,16 +339,13 @@ server.tool(
     let composite = false;
     let source: "local" | "remote" = "local";
     try {
-      const resolved = await resolveOrLogin(name);
-      composite = isComposite(resolved.item);
-      source = isRemoteSource(resolved.source) ? "remote" : "local";
-    } catch (e) {
-      if (e instanceof RegistryRateLimitError) return gateResult(rateLimitNotice(e));
-      if (e instanceof RegistryAuthError) {
-        return gateResult(
-          "Login requerido para esta tool remota: autorizá el dispositivo (ver la URL en la terminal).",
-        );
+      const gate = await resolveWithGate(name);
+      if (gate.notice) return gateResult(gate.notice); // login pendiente / límite: no ejecutamos.
+      if (gate.resolved) {
+        composite = isComposite(gate.resolved.item);
+        source = isRemoteSource(gate.resolved.source) ? "remote" : "local";
       }
+    } catch {
       // no existe en ningún lado; run()/runComposite() lo reportan como no-aplica.
     }
     const res = composite

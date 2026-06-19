@@ -1,17 +1,33 @@
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { paths } from "../config.js";
 import { registryConfig } from "./config.js";
 import { writeApiKey } from "./credentials.js";
 
 /**
- * Login device-code (estilo `gh auth login`): cuando el remoto responde 401 y no hay key,
- * arrancamos un device flow contra el server y BLOQUEAMOS la llamada MCP haciendo polling
- * hasta que el usuario autorice (o se agote el tiempo, ~5 min por defecto). Al recibir la
- * key la persistimos con writeApiKey() y la próxima request remota ya sale firmada.
+ * Login device-code NO BLOQUEANTE (estilo `gh auth login`, pero sin colgar la llamada).
+ * Cuando el remoto responde 401:
+ *   - 1er intento: arrancamos un device flow, GUARDAMOS el device_code en disco
+ *     (~/.tool-memory/pending-device.json) y devolvemos el link para que el usuario
+ *     autorice. La tool termina ya — no hay polling bloqueante.
+ *   - Intentos siguientes (tras autorizar): hacemos UN solo poll con el device_code
+ *     guardado; si ya está autorizado, persistimos la api_key y seguimos.
  *
- * Los mensajes al usuario van por STDERR (stdout es el protocolo MCP stdio).
+ * El device_code va a disco para sobrevivir reinicios del MCP server entre que el usuario
+ * loguea y reintenta. La key final la escribe credentials.ts; este módulo nunca la loguea.
  */
 
-/** Tope de espera del polling. El server expira el device_code aparte (suele ser mayor). */
-const POLL_MAX_MS = Number(process.env.TOOL_MEMORY_LOGIN_TIMEOUT_MS ?? 300_000);
+interface PendingDevice {
+  device_code: string;
+  user_code?: string;
+  verification_url: string;
+  expires_at: string; // ISO
+}
 
 interface DeviceStart {
   device_code: string;
@@ -21,60 +37,111 @@ interface DeviceStart {
   expires_in?: number;
 }
 
-/** Resultado de un poll: la key, "pending" (seguir esperando) o null (expiró/inválido). */
+/** Resultado de un poll: la api_key, "pending" (seguir esperando) o null (expiró/inválido). */
 type PollResult = string | "pending" | null;
+
+/**
+ * Resultado de un intento de login. `authorized` → ya hay key, reintentá el request.
+ * `pending` → mostrale el link al usuario. `unavailable` → el server no respondió.
+ */
+export type DeviceLoginOutcome =
+  | { status: "authorized" }
+  | { status: "pending"; verificationUrl: string; userCode?: string }
+  | { status: "unavailable" };
 
 function warn(msg: string): void {
   process.stderr.write(`[tool-memory] login: ${msg}\n`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+// ---- Persistencia del device-code pendiente (best-effort, mismo patrón que credentials) ----
+
+function readPending(): PendingDevice | null {
+  try {
+    if (!existsSync(paths.pendingDevice)) return null;
+    const p = JSON.parse(readFileSync(paths.pendingDevice, "utf8")) as PendingDevice;
+    if (!p?.device_code) return null;
+    if (p.expires_at && Date.parse(p.expires_at) <= Date.now()) {
+      clearPending();
+      return null;
+    }
+    return p;
+  } catch {
+    return null;
+  }
 }
 
-// Un solo login a la vez: discover y run pueden toparse con 401 casi simultáneamente y no
-// queremos abrir dos device flows. El segundo se cuelga del mismo Promise.
-let inFlight: Promise<boolean> | null = null;
+function writePending(p: PendingDevice): void {
+  try {
+    mkdirSync(paths.root, { recursive: true });
+    writeFileSync(paths.pendingDevice, JSON.stringify(p, null, 2) + "\n");
+  } catch {
+    // No se pudo persistir: el flujo igual funciona si el server no reinicia.
+  }
+}
+
+function clearPending(): void {
+  try {
+    if (existsSync(paths.pendingDevice)) rmSync(paths.pendingDevice);
+  } catch {
+    // best-effort
+  }
+}
+
+// ---- Orquestación ----
+
+// Un intento a la vez: discover y run pueden toparse con 401 casi simultáneos y no queremos
+// arrancar dos device flows. El segundo se cuelga del mismo Promise.
+let inFlight: Promise<DeviceLoginOutcome> | null = null;
 
 /**
- * Dispara (o reusa) el device flow. Devuelve true si quedó una key persistida, false si no
- * (timeout, expiró, o el server no respondió). Best-effort: nunca lanza.
+ * Intenta avanzar el login SIN bloquear. Reusa un device-code pendiente (poll único) o
+ * arranca uno nuevo. Best-effort: nunca lanza.
  */
-export function login(): Promise<boolean> {
+export function attemptDeviceLogin(): Promise<DeviceLoginOutcome> {
   if (inFlight) return inFlight;
-  inFlight = doLogin().finally(() => {
+  inFlight = doAttempt().finally(() => {
     inFlight = null;
   });
   return inFlight;
 }
 
-async function doLogin(): Promise<boolean> {
-  const start = await startDevice();
-  if (!start) return false;
-
-  process.stderr.write(
-    `\n[tool-memory] Para usar las tools remotas, autorizá este dispositivo:\n` +
-      `  → ${start.verification_url}\n` +
-      (start.user_code ? `  código: ${start.user_code}\n` : "") +
-      `Esperando autorización (hasta ${Math.round(POLL_MAX_MS / 1000)}s)...\n\n`,
-  );
-
-  const intervalMs = Math.max(1, start.interval ?? 5) * 1000;
-  const deadline = Date.now() + POLL_MAX_MS;
-  while (Date.now() < deadline) {
-    await sleep(intervalMs);
-    const r = await pollDevice(start.device_code);
-    if (r === "pending") continue;
-    if (r === null) {
-      warn("device_code expirado o inválido");
-      return false;
+async function doAttempt(): Promise<DeviceLoginOutcome> {
+  // 1. ¿Hay un device flow pendiente y vigente? Polleamos UNA vez por si ya autorizó.
+  const pending = readPending();
+  if (pending) {
+    const r = await pollDevice(pending.device_code);
+    if (r === "pending") {
+      return {
+        status: "pending",
+        verificationUrl: pending.verification_url,
+        userCode: pending.user_code,
+      };
     }
-    writeApiKey(r);
-    process.stderr.write(`[tool-memory] dispositivo autorizado ✓\n`);
-    return true;
+    if (r === null) {
+      // el server lo dio por expirado/inválido: arrancamos uno nuevo abajo.
+      clearPending();
+    } else {
+      // r es la api_key (cualquier string que no sea el literal "pending").
+      writeApiKey(r);
+      clearPending();
+      return { status: "authorized" };
+    }
   }
-  warn("tiempo de espera agotado");
-  return false;
+
+  // 2. Arrancar un device flow nuevo y persistirlo.
+  const start = await startDevice();
+  if (!start) return { status: "unavailable" };
+  writePending({
+    device_code: start.device_code,
+    user_code: start.user_code,
+    verification_url: start.verification_url,
+    expires_at: new Date(Date.now() + (start.expires_in ?? 900) * 1000).toISOString(),
+  });
+  return {
+    status: "pending",
+    verificationUrl: start.verification_url,
+    userCode: start.user_code,
+  };
 }
 
 /** POST /v1/auth/device/start. `null` si el server no respondió bien. */
@@ -107,7 +174,7 @@ async function startDevice(): Promise<DeviceStart | null> {
 
 /**
  * POST /v1/auth/device/poll una vez. 400 → null (expiró/inválido). 200 con api_key → la key.
- * Cualquier otro caso (incluido error de red transitorio) → "pending": seguimos intentando.
+ * Cualquier otro caso (incluido error de red transitorio) → "pending": no abortamos.
  * Exportada para tests (inyectando globalThis.fetch).
  */
 export async function pollDevice(deviceCode: string): Promise<PollResult> {
@@ -119,12 +186,11 @@ export async function pollDevice(deviceCode: string): Promise<PollResult> {
       signal: AbortSignal.timeout(registryConfig.timeoutMs),
     });
     if (res.status === 400) return null; // expired_token / inválido
-    if (!res.ok) return "pending"; // 5xx u otro transitorio: reintentamos
+    if (!res.ok) return "pending"; // 5xx u otro transitorio: reintentamos en la próxima
     const body = (await res.json()) as { status?: string; api_key?: string };
     if (body.api_key) return body.api_key;
     return "pending";
   } catch {
-    // Error de red transitorio: no abortamos el login, seguimos esperando.
     return "pending";
   }
 }
