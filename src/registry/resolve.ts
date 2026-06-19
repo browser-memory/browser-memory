@@ -1,11 +1,7 @@
 import { loadItem } from "../memory/store.js";
 import { isComposite, type MemoryItem } from "../schema/tool.js";
 import { getCached, setCached } from "./cache.js";
-import {
-  fetchRemoteTool,
-  RegistryAuthError,
-  RegistryRateLimitError,
-} from "./client.js";
+import { fetchRemoteTool } from "./client.js";
 import { logEvent } from "./log.js";
 
 /**
@@ -16,6 +12,11 @@ import { logEvent } from "./log.js";
  *   3. disco local   → source "local"        (fallback: solo si el server no la tiene)
  * Si no está en ningún lado, lanza con el MISMO mensaje que store.loadItem para preservar
  * el contrato `no-aplica` del runner.
+ *
+ * GATE DURO: si el server responde 401/403/429, fetchRemoteTool LANZA y eso se propaga sin
+ * caer a local — sin sesión válida no se sirve nada (ni la copia local). El fallback a disco
+ * solo ocurre cuando el server respondió 404 (no la tiene) o estaba CAÍDO (5xx/timeout →
+ * null), preservando la resiliencia offline para quien ya tiene key.
  *
  * Costo de "gana el server": una tool de server se baja en cada run (la cache solo vive lo
  * que dura el proceso). Una tool SOLO local hace un GET que da 404 (silencioso) y cae al
@@ -40,38 +41,27 @@ export async function resolveItem(name: string): Promise<Resolved> {
   if (cached) return { item: cached, source: "remote-cache" };
 
   // 2. Pull remoto: el server gana. Baja + valida + cachea. Solo acá se emite tool_pulled.
-  //    Un 401/429 (gating) NO debe tapar una copia local: lo recordamos y probamos local
-  //    primero; solo lo propagamos si la tool es EXCLUSIVAMENTE remota (no hay fallback).
-  let gatingError: RegistryAuthError | RegistryRateLimitError | null = null;
-  try {
-    const pulled = await fetchRemoteTool(name);
-    if (pulled) {
-      setCached(name, pulled);
-      logEvent({
-        event_type: "tool_pulled",
-        tool_name: name,
-        item_type: isComposite(pulled) ? "composite" : "primitive",
-        source: "remote",
-      });
-      return { item: pulled, source: "remote-pull" };
-    }
-  } catch (e) {
-    if (e instanceof RegistryAuthError || e instanceof RegistryRateLimitError) {
-      gatingError = e;
-    } else {
-      throw e;
-    }
+  //    GATE DURO: un 401/429 (RegistryAuth/RateLimitError) se PROPAGA acá mismo, sin caer a
+  //    local — sin sesión válida no se sirve nada. Los 5xx/timeout NO llegan a tirar (fetchRemoteTool
+  //    los degrada a null), así el fallback local de abajo da resiliencia ante server CAÍDO.
+  const pulled = await fetchRemoteTool(name);
+  if (pulled) {
+    setCached(name, pulled);
+    logEvent({
+      event_type: "tool_pulled",
+      tool_name: name,
+      item_type: isComposite(pulled) ? "composite" : "primitive",
+      source: "remote",
+    });
+    return { item: pulled, source: "remote-pull" };
   }
 
-  // 3. Fallback a disco local (anda aunque el server gatee o esté caído).
+  // 3. Fallback a disco local (solo si el server respondió 404 o estaba caído, NO si gateó).
   try {
     return { item: loadItem(name), source: "local" };
   } catch {
     // no está local.
   }
 
-  // 4. Ni remoto (por gating) ni local: propagamos el gating para que el handler dispare
-  //    login (401) o avise el límite (429). Si no hubo gating, es un "no existe" normal.
-  if (gatingError) throw gatingError;
   throw new Error(`Item no encontrado en memoria: ${name}`);
 }

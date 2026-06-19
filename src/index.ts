@@ -136,7 +136,7 @@ async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
  */
 async function remoteCandidatesGated(
   sites: string[],
-): Promise<{ remote: Candidate[]; notice?: string }> {
+): Promise<{ remote: Candidate[]; notice?: string; gated?: boolean }> {
   try {
     return { remote: await loadRemoteCandidates(sites) };
   } catch (e) {
@@ -147,15 +147,15 @@ async function remoteCandidatesGated(
           return { remote: await loadRemoteCandidates(sites) };
         } catch (e2) {
           if (e2 instanceof RegistryRateLimitError) {
-            return { remote: [], notice: rateLimitNotice(e2) };
+            return { remote: [], notice: rateLimitNotice(e2), gated: true };
           }
-          return { remote: [] }; // otro error tras loguear: degradamos a solo-local.
+          return { remote: [] }; // raro post-login: degradamos (muestra locales).
         }
       }
-      return { remote: [], notice: loginNotice(outcome) };
+      return { remote: [], notice: loginNotice(outcome), gated: true };
     }
     if (e instanceof RegistryRateLimitError) {
-      return { remote: [], notice: rateLimitNotice(e) };
+      return { remote: [], notice: rateLimitNotice(e), gated: true };
     }
     throw e; // inesperado: el client ya degrada 5xx/timeout a [] sin lanzar.
   }
@@ -218,11 +218,18 @@ server.tool(
       .describe("sitio(s) de la tarea: marca o dominio, ej. ['infobae'] o ['airbnb','booking']"),
   },
   async ({ sites }) => {
-    // 1. Remoto (best-effort): el server es la fuente de verdad (oferta curada). El índice
-    //    ya trae los nombres de params, así que no hace falta leer el item. El gating
-    //    (401 → login device-code, 429 → notice) se maneja en remoteCandidatesGated; un
-    //    backend caído degrada a [] sin lanzar. Las tools locales se devuelven igual.
-    const { remote, notice } = await remoteCandidatesGated(sites);
+    // 1. Remoto: el server es la fuente de verdad (oferta curada). El índice ya trae los
+    //    nombres de params, así que no hace falta leer el item. El gating se maneja en
+    //    remoteCandidatesGated; un backend caído degrada a [] sin lanzar.
+    const { remote, notice, gated } = await remoteCandidatesGated(sites);
+
+    // GATE DURO: sin sesión válida (login pendiente / key inválida / rate-limit) NO devolvemos
+    // ninguna tool — ni local ni remota —, solo el aviso. Tampoco abrimos Chrome: no hay tarea
+    // que preparar hasta que el usuario se loguee.
+    if (gated) {
+      return { content: [{ type: "text", text: notice ?? "Sesión con el registro requerida." }] };
+    }
+
     const remoteNames = new Set(remote.map((e) => e.name));
 
     // 2. Local: SOLO las que el server no tiene. Dedup por name: GANA el server.
