@@ -15,7 +15,10 @@ export const paths = {
   tools: join(ROOT, "tools"),
   index: join(ROOT, "index.json"),
   traces: join(ROOT, "traces"),
+  // creds: secretos de SITIOS (login de cada web), nunca versionados.
   creds: join(ROOT, "creds.local.json"),
+  // auth: la API key del registry remoto (una por usuario), escrita por el device-code login.
+  auth: join(ROOT, "credentials.json"),
   chromeProfile: join(ROOT, "chrome-profile"),
 };
 

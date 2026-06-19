@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import { getInstallId } from "./install-id.js";
+import { readApiKey } from "./credentials.js";
 
 /**
  * Config del registro remoto. El subsistema remoto es OBLIGATORIO y siempre activo:
@@ -21,7 +22,6 @@ function readClientVersion(): string {
 
 export interface RegistryConfig {
   baseUrl: string;
-  apiKey: string | null;
   timeoutMs: number;
   installId: string;
   clientVersion: string;
@@ -29,8 +29,17 @@ export interface RegistryConfig {
 
 export const registryConfig: RegistryConfig = {
   baseUrl: (process.env.TOOL_MEMORY_REGISTRY_URL ?? DEFAULT_REGISTRY_URL).replace(/\/$/, ""),
-  apiKey: process.env.TOOL_MEMORY_REGISTRY_KEY ?? null,
   timeoutMs: Number(process.env.TOOL_MEMORY_REGISTRY_TIMEOUT_MS ?? 3000),
   installId: getInstallId(),
   clientVersion: readClientVersion(),
 };
+
+/**
+ * Resuelve la API key en cada request (NO al startup): el device-code login la escribe
+ * en runtime. Orden: env `TOOL_MEMORY_REGISTRY_KEY` (override manual dev/CI) → cache →
+ * ~/.tool-memory/credentials.json. `null` si no hay login (dispara device-code cuando hace
+ * falta el remoto).
+ */
+export function getApiKey(): string | null {
+  return process.env.TOOL_MEMORY_REGISTRY_KEY ?? readApiKey();
+}

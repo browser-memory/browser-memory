@@ -17,6 +17,7 @@
     "test": "node --test --import tsx \"./test/*.test.ts\"",
     "smoke": "tsx test/smoke.ts",
     "smoke:composite": "tsx test/smoke-composite.ts",
+    "e2e:remote": "tsx test/e2e-remote.ts",
     "verify:netlog": "tsx test/verify-netlog.ts",
     "inspect": "DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector -e TOOL_MEMORY_RESEED=1 npx tsx src/index.ts",
     "inspect:dist": "npm run build && DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector -e TOOL_MEMORY_RESEED=1 node dist/index.js",

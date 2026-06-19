@@ -1,12 +1,52 @@
-import { registryConfig } from "./config.js";
+import { registryConfig, getApiKey } from "./config.js";
 import { parseMemoryItem, type MemoryItem, type SideEffect } from "../schema/tool.js";
 import { normalizeSite } from "../memory/store.js";
 
 /**
- * Cliente HTTP fino sobre `fetch` nativo (mismo patrón que execute.ts:runHttp). Todo es
- * best-effort: ante cualquier fallo de red/timeout devuelve el fallback vacío y NUNCA
- * propaga la excepción — un backend caído no debe romper el MCP.
+ * Cliente HTTP fino sobre `fetch` nativo (mismo patrón que execute.ts:runHttp). Best-effort
+ * para fallos de ENTORNO (red/timeout/5xx): devuelve el fallback vacío sin propagar — un
+ * backend caído no debe romper el MCP. Pero distingue dos respuestas del gating que SÍ se
+ * propagan (errores tipados), porque el usuario tiene que enterarse:
+ *   401/403 → RegistryAuthError      (falta/invalida la key → disparar login device-code)
+ *   429     → RegistryRateLimitError (límite alcanzado → avisar; seguir con tools locales)
  */
+
+/** La key falta, es inválida o fue revocada (HTTP 401/403). */
+export class RegistryAuthError extends Error {
+  constructor(public status: number) {
+    super(`registry auth HTTP ${status}`);
+    this.name = "RegistryAuthError";
+  }
+}
+
+/** Se alcanzó el límite de uso (HTTP 429). `retryAfterSeconds` viene del header Retry-After. */
+export class RegistryRateLimitError extends Error {
+  constructor(public retryAfterSeconds: number | null) {
+    super("registry rate limited (HTTP 429)");
+    this.name = "RegistryRateLimitError";
+  }
+}
+
+/**
+ * Traduce los códigos de gating a errores tipados (lanza). El resto (incluido 404 y otros
+ * !ok) NO lo toca: lo maneja cada función como best-effort. Se llama justo después del
+ * fetch, antes de leer el body.
+ */
+export function classify(res: Response): void {
+  if (res.status === 401 || res.status === 403) {
+    throw new RegistryAuthError(res.status);
+  }
+  if (res.status === 429) {
+    const ra = res.headers.get("retry-after");
+    const seconds = ra != null && ra.trim() !== "" ? Number(ra) : NaN;
+    throw new RegistryRateLimitError(Number.isFinite(seconds) ? seconds : null);
+  }
+}
+
+/** ¿Es un error de gating que debe propagarse (vs best-effort)? */
+function isGatingError(e: unknown): boolean {
+  return e instanceof RegistryAuthError || e instanceof RegistryRateLimitError;
+}
 
 /** Entrada del índice remoto: IndexEntry + los nombres de params (sin valores). */
 export interface RemoteIndexEntry {
@@ -25,7 +65,8 @@ function url(path: string): string {
 
 function headers(): Record<string, string> {
   const h: Record<string, string> = { "content-type": "application/json" };
-  if (registryConfig.apiKey) h["x-api-key"] = registryConfig.apiKey;
+  const key = getApiKey();
+  if (key) h["x-api-key"] = key;
   return h;
 }
 
@@ -44,6 +85,7 @@ export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntr
       headers: headers(),
       signal: AbortSignal.timeout(registryConfig.timeoutMs),
     });
+    classify(res);
     if (!res.ok) {
       warn(`index HTTP ${res.status}`);
       return [];
@@ -51,6 +93,7 @@ export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntr
     const body = (await res.json()) as { entries?: RemoteIndexEntry[] };
     return body.entries ?? [];
   } catch (e) {
+    if (isGatingError(e)) throw e;
     warn(`index falló: ${(e as Error).message}`);
     return [];
   }
@@ -69,6 +112,7 @@ export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
       headers: headers(),
       signal: AbortSignal.timeout(registryConfig.timeoutMs),
     });
+    classify(res);
     if (!res.ok) {
       warn(`sites HTTP ${res.status}`);
       return [];
@@ -76,6 +120,7 @@ export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
     const body = (await res.json()) as { sites?: RemoteSiteEntry[] };
     return body.sites ?? [];
   } catch (e) {
+    if (isGatingError(e)) throw e;
     warn(`sites falló: ${(e as Error).message}`);
     return [];
   }
@@ -88,6 +133,7 @@ export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> 
       headers: headers(),
       signal: AbortSignal.timeout(registryConfig.timeoutMs),
     });
+    classify(res);
     if (!res.ok) {
       if (res.status !== 404) warn(`tool '${name}' HTTP ${res.status}`);
       return null;
@@ -97,6 +143,7 @@ export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> 
     // No confiamos a ciegas en el server: re-validamos con el MISMO schema del cliente.
     return parseMemoryItem(body.tool);
   } catch (e) {
+    if (isGatingError(e)) throw e;
     warn(`tool '${name}' falló: ${(e as Error).message}`);
     return null;
   }
