@@ -1,40 +1,65 @@
 # browser-memory
 
-Give your agent a **reusable memory of web actions**. The first time it does
-something on a site, it *learns* and saves it as a tool. The next time, it
-*replays* that tool deterministically — no exploration, no model in the loop.
+**Give your AI agent a reusable memory of web actions.** The first time it does
+something on a website, it *learns* the steps and saves them as a tool. Every
+time after that, it *replays* that tool directly — no exploring, no model in the
+loop, same result.
 
-🌐 **[browser-memory.com](https://browser-memory.com/)**
+Open source (MIT). It runs on your machine and your memory is yours.
 
 ## What it does
 
-Ask your agent to do something on a website (e.g. *"search cats on Wikipedia"*):
+Ask your agent to do something on a site, e.g. *"search cats on Wikipedia"*:
 
-- **First time** → memory is empty, so the agent explores the site and captures
-  the path that worked, distilling it into a reusable tool.
-- **Next time** → it finds the saved tool and replays it directly.
+- **First time** → memory is empty, so the agent explores the page, finds the
+  path that works, and distills it into a small reusable tool.
+- **Next time** → it finds that saved tool and replays it deterministically —
+  fast, cheap, and repeatable.
 
-Memory is local to your machine and starts empty.
+It's an MCP server, so it plugs into any MCP-compatible agent (Claude Code,
+etc.). It drives a real Chrome over the DevTools Protocol, so it reuses your
+logged-in sessions instead of asking you to re-authenticate.
 
-## Add to Claude Code
+## Local or server
 
-It needs **two** MCP servers together: `browser-memory` (replays saved tools)
-and `@playwright/mcp` (explores while learning). Add both:
+You can use browser-memory in two ways — they combine freely:
+
+- **Local (default).** Everything your agent learns is saved on *your* machine
+  in `~/.tool-memory` (tools, index, traces, and a dedicated Chrome profile).
+  Nothing leaves your computer. Your memory starts empty and grows as you use
+  it. Secrets live in the Chrome profile — never in tools or traces.
+
+- **Server (shared registry).** browser-memory can also pull ready-made tools
+  from a remote registry, so your agent starts with actions other people
+  already figured out instead of learning every site from scratch. Point it at
+  any registry with `TOOL_MEMORY_REGISTRY_URL` (see [Configuration](#configuration)).
+
+In both cases the browser, the replay engine, and your local memory stay on your
+machine — the registry only serves tool *definitions*.
+
+## Install
+
+browser-memory needs **two** MCP servers working together:
+
+- `browser-memory` — replays your saved tools.
+- `@playwright/mcp` — drives the browser while learning something new.
+
+### Add to Claude Code
 
 ```bash
 claude mcp add --scope user browser-memory -- npx -y browser-memory
 claude mcp add --scope user playwright -- npx @playwright/mcp@latest --cdp-endpoint http://127.0.0.1:9333
 ```
 
-Then run `/mcp` inside Claude Code to confirm both connect.
+Run `/mcp` inside Claude Code to confirm both connect.
 
 > `--scope user` enables them in every project. Nothing to clone or build —
 > `npx` downloads and runs on demand. Requires **Node.js >= 20** and a browser
-> (uses your system Google Chrome if present, else Playwright's Chromium).
+> (uses your system Google Chrome if present, otherwise Playwright's Chromium).
 
 ### Or with a `.mcp.json` file
 
-Drop this in your project (works on any host):
+Drop this in your project (works with any MCP host):
 
 ```json
 {
@@ -51,7 +76,7 @@ Drop this in your project (works on any host):
 }
 ```
 
-## Run with npm
+### Run it directly
 
 ```bash
 npm i browser-memory
@@ -64,14 +89,14 @@ The server launches the shared Chrome and listens on stdio for any MCP host.
 
 | Env var | Default | Purpose |
 | --- | --- | --- |
-| `TOOL_MEMORY_HOME` | `~/.tool-memory` | Where tools, index, traces and the Chrome profile live |
+| `TOOL_MEMORY_HOME` | `~/.tool-memory` | Where your tools, index, traces and the Chrome profile live |
 | `TOOL_MEMORY_CDP_PORT` | `9333` | Remote-debugging port of the shared Chrome (must match `@playwright/mcp`'s `--cdp-endpoint`) |
 | `TOOL_MEMORY_CHROME_BIN` | system Chrome, else Playwright's Chromium | Chrome binary to launch |
 | `TOOL_MEMORY_RESEED` | `1` | Refresh session/auth from your real Chrome on every launch; set `0` to disable |
+| `TOOL_MEMORY_REGISTRY_URL` | built-in registry | Point at a different shared registry (your own, a team's, dev/staging) |
 
 On first launch the dedicated profile is seeded from your real Chrome's most-used
-profile, so you start already logged in. Secrets live in that profile — never in
-tools or traces.
+profile, so you start already logged in.
 
 ## License
 
