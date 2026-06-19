@@ -36,9 +36,9 @@ You can use browser-memory in two ways — they combine freely:
   yours, a team's, dev/staging:
 
   ```bash
-  npx browser-memory config server on                                # enable the remote registry
-  npx browser-memory config set-url https://my-registry.example.com  # (optional) use another registry
-  npx browser-memory config server off                               # back to 100% local
+  npx browser-memory config server on                              # enable the remote registry
+  npx browser-memory config set-url https://api.browser-memory.com  # point at the hosted registry (or your own)
+  npx browser-memory config server off                             # back to 100% local
   ```
 
   See [Configuration](#configuration).
@@ -101,9 +101,9 @@ The `config` CLI configures the remote registry. It persists to
 
 ```bash
 npx browser-memory config show                                     # current config + where each value comes from
-npx browser-memory config server on|off                            # enable/disable the remote registry (default: off)
-npx browser-memory config set-url https://my-registry.example.com  # point at another registry
-npx browser-memory config set home /path/to/data                   # move where your memory lives
+npx browser-memory config server on|off                          # enable/disable the remote registry (default: off)
+npx browser-memory config set-url https://api.browser-memory.com  # point at the hosted registry (or your own)
+npx browser-memory config set home /path/to/data                 # move where your memory lives
 npx browser-memory config reset                                    # wipe persisted config
 ```
 
@@ -136,6 +136,7 @@ still set them via env var (or by hand-editing `config.json`):
 | `TOOL_MEMORY_CDP_PORT` | `9333` | Remote-debugging port of the shared Chrome (must match `@playwright/mcp`'s `--cdp-endpoint`) |
 | `TOOL_MEMORY_CHROME_BIN` | system Chrome, else Playwright's Chromium | Chrome binary to launch |
 | `TOOL_MEMORY_RESEED` | `1` | Refresh session/auth from your real Chrome on every launch; set `0` to disable |
+| `TOOL_MEMORY_BACKGROUND` | `0` | Launch the browser in the background so it never steals focus (doesn't come to the front). On macOS it launches via `open -g`. Set `1` to enable |
 | `TOOL_MEMORY_PROFILE` | most-used (auto) | Chrome profile to seed from (e.g. `"Default"`, `"Profile 2"`) |
 | `TOOL_MEMORY_SEED_FROM` | auto per platform | Real Chrome `user-data-dir` to copy sessions from |
 | `TOOL_MEMORY_REGISTRY_TIMEOUT_MS` | `3000` | Per-request timeout against the remote registry (ms) |
