@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://browser-memory.com">
-    <img src="assets/banner.svg" alt="browser-memory" width="640">
+    <img src="https://raw.githubusercontent.com/frisbee-one/browser-memory/main/assets/banner.png" alt="browser-memory" width="640">
   </a>
 </p>
 
@@ -21,6 +21,10 @@ A single, self-contained MCP server (open source, MIT). It runs on your machine,
 
 ## Install
 
+Requires Node.js ≥ 20 and Chrome (uses your system Google Chrome if present, otherwise Playwright's Chromium).
+
+Pick **one** of these — you don't need all three:
+
 **Claude Code:**
 
 ```bash
@@ -39,14 +43,12 @@ claude mcp add --scope user browser-memory -- npx -y browser-memory
 npm i browser-memory && npx browser-memory
 ```
 
-Requires Node.js ≥ 20 and Chrome (uses your system Google Chrome if present, otherwise Playwright's Chromium).
-
 ## Registry (optional)
 
 On by default — it pulls ready-made tools from the hosted registry (`https://api.browser-memory.com`). Turn it off to run 100% local, or point it at another backend:
 
 ```bash
-npx browser-memory config server off                              # back to 100% local
-npx browser-memory config server on                               # re-enable (default)
-npx browser-memory config set-url https://api.browser-memory.com  # point at a registry (yours or the hosted one)
+npx browser-memory config server off
+npx browser-memory config server on
+npx browser-memory config set-url https://api.browser-memory.com
 ```

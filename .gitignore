@@ -1,20 +1,20 @@
 node_modules/
 dist/
 *.log
-# secretos / estado local — nunca versionar
+# secrets / local state — never version
 creds.local.json
 .tool-memory/
-# guía local para el agente — no versionar ni publicar
+# local agent guide — do not version or publish
 CLAUDE.md
-# scratch / artefactos de exploración del browser — no versionar
+# scratch / browser exploration artifacts — do not version
 .playwright-mcp/
 modal-*.md
 snap-*.md
 prod-stepper.md
-# wiring local de Claude Code (MCP) — config propia, no pública
+# local Claude Code (MCP) wiring — own config, not public
 .mcp.json
-# guía local de publicación — no versionar
+# local publishing guide — do not version
 PUBLISH.md
-# tooling externo de trazas (Python) — no versionar
+# external trace tooling (Python) — do not version
 webtrace/
 __pycache__/
