@@ -4,9 +4,9 @@ import { join } from "node:path";
 import { paths } from "../config.js";
 
 /**
- * Identificador anónimo y estable de la instalación, para agrupar el uso en los logs
- * SIN PII. Se genera un UUID al azar la primera vez y se guarda en ~/.tool-memory/install-id
- * (fuera de tools/). No deriva de hostname ni de nada de la máquina.
+ * Anonymous, stable identifier of the installation, to group usage in the logs
+ * WITHOUT PII. A random UUID is generated the first time and stored in ~/.tool-memory/install-id
+ * (outside tools/). It is not derived from hostname or anything about the machine.
  */
 let cached: string | null = null;
 
@@ -27,7 +27,7 @@ export function getInstallId(): string {
     cached = id;
     return id;
   } catch {
-    // Si no podemos persistir (FS de solo lectura, etc.), usamos un id efímero del proceso.
+    // If we can't persist (read-only FS, etc.), we use an ephemeral process id.
     cached = cached ?? randomUUID();
     return cached;
   }

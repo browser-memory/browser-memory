@@ -14,7 +14,7 @@ const base = {
   success_assertion: { type: "dom", expr: ".result" },
 };
 
-test("tool bien cableado no tiene problemas", () => {
+test("a well-wired tool has no problems", () => {
   const tool = parseTool({
     ...base,
     recipe: { kind: "playwright", steps: [{ action: "navigate", url: "https://s.com/{{q|kebab}}" }] },
@@ -23,40 +23,40 @@ test("tool bien cableado no tiene problemas", () => {
   assert.deepEqual(lintTool(tool), []);
 });
 
-test("caza la llave simple {q_kebab}", () => {
+test("catches the single brace {q_kebab}", () => {
   const tool = parseTool({
     ...base,
     requires: { params: { q_kebab: "string" }, env: {} },
     recipe: { kind: "playwright", steps: [{ action: "navigate", url: "https://s.com/{q_kebab}_x" }] },
   });
   const problems = lintTool(tool);
-  assert.ok(problems.some((p) => p.includes("una sola llave")), problems.join("; "));
+  assert.ok(problems.some((p) => p.includes("single-brace")), problems.join("; "));
 });
 
-test("caza un param declarado pero no usado", () => {
+test("catches a declared but unused param", () => {
   const tool = parseTool({
     ...base,
     recipe: { kind: "playwright", steps: [{ action: "navigate", url: "https://s.com/fijo" }] },
   });
   const problems = lintTool(tool);
-  assert.ok(problems.some((p) => p.includes("'q'") && p.includes("no se usa")), problems.join("; "));
+  assert.ok(problems.some((p) => p.includes("'q'") && p.includes("isn't used")), problems.join("; "));
 });
 
-test("caza el extractor que usa 'q' suelto en vez de params.q", () => {
+test("catches the extractor that uses bare 'q' instead of params.q", () => {
   const tool = parseTool({
     ...base,
     recipe: { kind: "playwright", steps: [{ action: "navigate", url: "https://s.com/{{q|kebab}}" }] },
     result_extractor: { type: "dom", fn: "(root) => { const x = q.toLowerCase(); return x; }" },
   });
   const problems = lintTool(tool);
-  assert.ok(problems.some((p) => p.includes("suelto")), problems.join("; "));
+  assert.ok(problems.some((p) => p.includes("bare")), problems.join("; "));
 });
 
-test("caza un filtro desconocido", () => {
+test("catches an unknown filter", () => {
   const tool = parseTool({
     ...base,
     recipe: { kind: "playwright", steps: [{ action: "navigate", url: "https://s.com/{{q|wat}}" }] },
   });
   const problems = lintTool(tool);
-  assert.ok(problems.some((p) => p.includes("filtro desconocido")), problems.join("; "));
+  assert.ok(problems.some((p) => p.includes("unknown filter")), problems.join("; "));
 });

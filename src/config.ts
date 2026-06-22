@@ -4,14 +4,14 @@ import { existsSync, readFileSync } from "node:fs";
 import { cfg, truthy } from "./settings.js";
 
 /**
- * Rutas y parámetros globales del sistema.
+ * Global paths and system parameters.
  *
- * La memoria es global (no por-proyecto): un tool de un sitio sirve en cualquier
- * contexto. Vive en ~/.tool-memory/ salvo override por env (útil para tests).
+ * The memory is global (not per-project): a tool from a site works in any
+ * context. It lives in ~/.tool-memory/ unless overridden by env (useful for tests).
  *
- * Toda la config se resuelve con `cfg()` (env var > config.json > default; ver settings.ts),
- * incluido `ROOT` (el dir de DATOS). El config.json en sí vive anclado a env-o-default (no
- * a este `home`), así que setear `home` reubica los datos sin mover el propio config.json.
+ * All config is resolved with `cfg()` (env var > config.json > default; see settings.ts),
+ * including `ROOT` (the DATA dir). The config.json itself is anchored to env-or-default (not
+ * to this `home`), so setting `home` relocates the data without moving the config.json itself.
  */
 const ROOT = cfg("TOOL_MEMORY_HOME") ?? join(homedir(), ".tool-memory");
 
@@ -20,39 +20,39 @@ export const paths = {
   tools: join(ROOT, "tools"),
   index: join(ROOT, "index.json"),
   traces: join(ROOT, "traces"),
-  // creds: secretos de SITIOS (login de cada web), nunca versionados.
+  // creds: SITE secrets (login for each website), never versioned.
   creds: join(ROOT, "creds.local.json"),
-  // auth: la API key del registry remoto (una por usuario), escrita por el device-code login.
+  // auth: the remote registry API key (one per user), written by the device-code login.
   auth: join(ROOT, "credentials.json"),
-  // pendingDevice: device-code en curso (entre el 1er 401 y la autorización), efímero.
+  // pendingDevice: device-code in progress (between the 1st 401 and authorization), ephemeral.
   pendingDevice: join(ROOT, "pending-device.json"),
   chromeProfile: join(ROOT, "chrome-profile"),
 };
 
-/** Puerto del remote-debugging del Chrome compartido. */
+/** Remote-debugging port of the shared Chrome. */
 export const cdpPort = Number(cfg("TOOL_MEMORY_CDP_PORT") ?? 9333);
 
 /**
- * Cada vez que se LANZA el Chrome (una vez por sesión, lazy) refrescamos los archivos
- * de sesión (cookies/login/storage) desde el Chrome real del usuario. Así arrastrás
- * logins nuevos sin re-copiar todo el perfil. Prendido por defecto para que cualquier
- * usuario levante su browser con las sesiones al día sin configurar nada; apagalo con
- * TOOL_MEMORY_RESEED=0. Para cookies 100% frescas conviene tener el Chrome real cerrado.
+ * Every time Chrome is LAUNCHED (once per session, lazy) we refresh the session files
+ * (cookies/login/storage) from the user's real Chrome. This way you carry over
+ * new logins without re-copying the whole profile. On by default so any user
+ * brings up their browser with up-to-date sessions without configuring anything; turn it off with
+ * TOOL_MEMORY_RESEED=0. For 100% fresh cookies it's best to have the real Chrome closed.
  */
 export const reseedEnabled = truthy(cfg("TOOL_MEMORY_RESEED"), true);
 
-/** Endpoint CDP al que se atachan tanto el runner como @playwright/mcp. */
+/** CDP endpoint of the dedicated Chrome; the replay runner and exploration tools attach to it. */
 export const cdpEndpoint = `http://127.0.0.1:${cdpPort}`;
 
-/** Primer candidato existente de una lista (o undefined). */
+/** First existing candidate from a list (or undefined). */
 function firstExisting(candidates: string[]): string | undefined {
   return candidates.find((p) => p && existsSync(p));
 }
 
 /**
- * Binario de Chrome a lanzar, por plataforma. Preferimos el Google Chrome del sistema
- * (perfil real del usuario para auth manual la primera vez); si no está, caemos al
- * chromium que trae Playwright. Override con TOOL_MEMORY_CHROME_BIN.
+ * Chrome binary to launch, by platform. We prefer the system Google Chrome
+ * (the user's real profile for manual auth the first time); if absent, we fall back to the
+ * chromium bundled with Playwright. Override with TOOL_MEMORY_CHROME_BIN.
  */
 export function resolveChromeBinary(): string | undefined {
   const override = cfg("TOOL_MEMORY_CHROME_BIN");
@@ -75,7 +75,7 @@ export function resolveChromeBinary(): string | undefined {
       join(local, "Google", "Chrome", "Application", "chrome.exe"),
     ];
   } else {
-    // linux y otros unix
+    // linux and other unix
     candidates = [
       "/usr/bin/google-chrome-stable",
       "/usr/bin/google-chrome",
@@ -85,16 +85,16 @@ export function resolveChromeBinary(): string | undefined {
       "/snap/bin/chromium",
     ];
   }
-  // undefined => dejamos que Playwright use su chromium empaquetado.
+  // undefined => let Playwright use its bundled chromium.
   return firstExisting(candidates);
 }
 
 /**
- * user-data-dir REAL del Chrome del usuario (donde viven sus cuentas logueadas), por
- * plataforma. Es el origen del "seed": copiamos el perfil activo acá para arrancar con
- * las sesiones ya iniciadas, sin tocar el dir real (Chrome 136+ bloquea el CDP sobre el
- * user-data-dir por defecto, por eso usamos una copia en un dir propio).
- * Override con TOOL_MEMORY_SEED_FROM. Devuelve undefined si no se encuentra.
+ * The REAL user-data-dir of the user's Chrome (where their logged-in accounts live), by
+ * platform. It's the source of the "seed": we copy the active profile here to start with
+ * sessions already signed in, without touching the real dir (Chrome 136+ blocks CDP on the
+ * user-data-dir by default, which is why we use a copy in our own dir).
+ * Override with TOOL_MEMORY_SEED_FROM. Returns undefined if not found.
  */
 export function realChromeUserDataDir(): string | undefined {
   const override = cfg("TOOL_MEMORY_SEED_FROM");
@@ -118,15 +118,15 @@ export function realChromeUserDataDir(): string | undefined {
       join(home, ".config", "chromium"),
     ];
   }
-  // Sirve si tiene CUALQUIER perfil dentro (Local State lista los perfiles reales).
+  // Works if it has ANY profile inside (Local State lists the real profiles).
   return candidates.find((root) => existsSync(join(root, "Local State")));
 }
 
 /**
- * Nombre del directorio de perfil a sembrar (ej. "Default", "Profile 2"). Auto-detecta
- * el MÁS usado leyendo `Local State` (`profile.last_used`), así un usuario con varios
- * perfiles arranca con el que realmente usa, sin configurar nada. Cae a "Default" si no
- * hay info. Override explícito con TOOL_MEMORY_PROFILE.
+ * Name of the profile directory to seed (e.g. "Default", "Profile 2"). Auto-detects
+ * the MOST used one by reading `Local State` (`profile.last_used`), so a user with several
+ * profiles starts with the one they actually use, without configuring anything. Falls back to "Default" if there's
+ * no info. Explicit override with TOOL_MEMORY_PROFILE.
  */
 export function resolveSeedProfile(srcRoot: string): string {
   const override = cfg("TOOL_MEMORY_PROFILE");
@@ -140,7 +140,7 @@ export function resolveSeedProfile(srcRoot: string): string {
       localState.profile?.last_active_profiles?.[0];
     if (candidate && existsSync(join(srcRoot, candidate))) return candidate;
   } catch {
-    // Local State ausente/ilegible: caemos al Default.
+    // Local State absent/unreadable: we fall back to Default.
   }
   return "Default";
 }

@@ -9,17 +9,17 @@ process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-learn-"));
 const { learn } = await import("../src/learn/signal.ts");
 
 const narration = {
-  goal: "buscar gatos en wikipedia",
+  goal: "search for cats on wikipedia",
   site: "es.wikipedia.org",
   outcome: "ok",
-  success_signal: "aparecen resultados",
+  success_signal: "results appear",
   steps: [
-    { intent: "buscar", action: "navigate", url: "https://es.wikipedia.org?q=gatos" },
+    { intent: "search", action: "navigate", url: "https://es.wikipedia.org?q=cats" },
   ],
   reader_fn: "() => []",
 };
 
-test("learn persiste la trace y emite pending_distill", () => {
+test("learn persists the trace and emits pending_distill", () => {
   const sig = learn({ goal: narration.goal, narration, network: [{ url: "x" }] });
   assert.equal(sig.status, "pending_distill");
   assert.match(sig.trace_id, /^trace-\d+$/);
@@ -28,19 +28,19 @@ test("learn persiste la trace y emite pending_distill", () => {
   assert.ok(existsSync(join(sig.trace_path, "network.json")));
 });
 
-test("el suggested_prompt incluye el contrato y el trace_path", () => {
+test("the suggested_prompt includes the contract and the trace_path", () => {
   const sig = learn({ goal: narration.goal, narration });
-  assert.match(sig.suggested_prompt, /Contrato del distiller/);
+  assert.match(sig.suggested_prompt, /Distiller contract/);
   assert.ok(sig.suggested_prompt.includes(sig.trace_path));
 });
 
-test("meta.json refleja el outcome de la narración", () => {
+test("meta.json reflects the outcome of the narration", () => {
   const sig = learn({ goal: narration.goal, narration });
   const meta = JSON.parse(readFileSync(join(sig.trace_path, "meta.json"), "utf8"));
   assert.equal(meta.outcome, "ok");
   assert.equal(meta.site, "es.wikipedia.org");
 });
 
-test("learn rechaza una narración sin pasos", () => {
+test("learn rejects a narration without steps", () => {
   assert.throws(() => learn({ goal: "x", narration: { ...narration, steps: [] } }));
 });

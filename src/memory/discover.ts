@@ -2,18 +2,18 @@ import { listIndex, normalizeSite, removeItem } from "./store.js";
 import type { IndexEntry, SideEffect } from "../schema/tool.js";
 
 /**
- * Discovery: matchea POR SITIO. La entrada es una lista de sitios (ej. ["infobae"],
- * ["airbnb", "wikipedia"]) — el nombre de marca o el dominio completo, da igual.
- * Devuelve TODAS las tools de los sitios que reconozca en memoria (incluidas
- * login/auth y demás precondiciones); el agente decide cuál correr y en qué orden.
+ * Discovery: matches BY SITE. The input is a list of sites (e.g. ["infobae"],
+ * ["airbnb", "wikipedia"]) — the brand name or the full domain, either works.
+ * Returns ALL the tools of the sites it recognizes in memory (including
+ * login/auth and other preconditions); the agent decides which to run and in what order.
  *
- * Si ninguno de los sitios pedidos está en memoria, devuelve VACÍO: ahí no hay nada
- * aprendido → el agente explora con playwright y captura tools nuevas (request →
+ * If none of the requested sites is in memory, returns EMPTY: there's nothing
+ * learned there → the agent explores with playwright and captures new tools (request →
  * distill → save).
  *
- * No hay ranking ni score: el match es binario por sitio. El único orden es composites
- * primero (§10.2); para el resto se preserva el orden del índice. El agente elige por
- * el `intent`.
+ * There's no ranking or score: the match is binary per site. The only ordering is composites
+ * first (§10.2); for the rest the index order is preserved. The agent chooses by
+ * the `intent`.
  */
 
 export interface Candidate {
@@ -23,22 +23,22 @@ export interface Candidate {
   intent: string;
   params: string[];
   side_effect: SideEffect;
-  /** De dónde salió: memoria local del usuario o el registro remoto. */
+  /** Where it came from: the user's local memory or the remote registry. */
   source?: "local" | "remote";
 }
 
-// Partes de dominio que NO identifican a un sitio (TLDs y subdominios genéricos).
+// Domain parts that do NOT identify a site (TLDs and generic subdomains).
 const GENERIC_DOMAIN_PARTS = new Set([
   "www", "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "co",
 ]);
 
 /**
- * Labels significativos de un sitio: sin esquema/www/path (normalizeSite) y sin partes
- * genéricas de dominio (TLDs, www, co...). Ej.: "infobae.com" → ["infobae"],
+ * Significant labels of a site: without scheme/www/path (normalizeSite) and without generic
+ * domain parts (TLDs, www, co...). E.g.: "infobae.com" → ["infobae"],
  * "es.wikipedia.org" → ["es", "wikipedia"], "news.ycombinator.com" → ["news",
- * "ycombinator"]. NO filtra por largo: así "x.com" → ["x"] y matchea con "x" (dominios
- * de una letra como Twitter/X). El costo es aceptar ccTLDs cortos como token ("es",
- * "io"), ruido marginal frente a soportar marcas de una letra.
+ * "ycombinator"]. Does NOT filter by length: so "x.com" → ["x"] and matches "x" (one-letter
+ * domains like Twitter/X). The cost is accepting short ccTLDs as a token ("es",
+ * "io"), marginal noise compared to supporting one-letter brands.
  */
 function siteCoreTokens(site: string): string[] {
   return normalizeSite(site)
@@ -46,7 +46,7 @@ function siteCoreTokens(site: string): string[] {
     .filter((p) => p && !GENERIC_DOMAIN_PARTS.has(p));
 }
 
-/** Composites primero (§10.2); estable para el resto. */
+/** Composites first (§10.2); stable for the rest. */
 function compositesFirst(a: IndexEntry, b: IndexEntry): number {
   return (b.type === "composite" ? 1 : 0) - (a.type === "composite" ? 1 : 0);
 }
@@ -57,30 +57,30 @@ export function toCandidate(e: IndexEntry): Candidate {
     type: e.type,
     site: e.site,
     intent: e.intent,
-    params: [], // se completa en index.ts leyendo el item (params/requires)
+    params: [], // filled in index.ts by reading the item (params/requires)
     side_effect: e.side_effect,
     source: "local",
   };
 }
 
-/** Composites primero, estable (mismo criterio que el discover local). Reutilizable. */
+/** Composites first, stable (same criterion as the local discover). Reusable. */
 export function sortCompositesFirst(list: Candidate[]): Candidate[] {
   return list.sort(
     (a, b) => (b.type === "composite" ? 1 : 0) - (a.type === "composite" ? 1 : 0),
   );
 }
 
-/** Resultado de olvidar un sitio: qué se borró de la memoria local. */
+/** Result of forgetting a site: what was deleted from local memory. */
 export interface ForgetResult {
   site: string;
   deleted: string[];
 }
 
 /**
- * Borra de la memoria LOCAL todas las tools del sitio pedido (mismo matching por
- * dominio/marca que `discover`). Es DIRECTO e IRREVERSIBLE: cada `removeItem` borra el
- * archivo y reindexa. No toca el registro remoto (la oferta curada es compartida y se
- * cura aparte). Si nada matchea, `deleted` viene vacío.
+ * Deletes from LOCAL memory all the tools of the requested site (same matching by
+ * domain/brand as `discover`). It's DIRECT and IRREVERSIBLE: each `removeItem` deletes the
+ * file and reindexes. It doesn't touch the remote registry (the curated offering is shared and
+ * curated separately). If nothing matches, `deleted` comes back empty.
  */
 export function forgetSite(site: string): ForgetResult {
   const deleted = discover([site]).map((c) => c.name);
@@ -88,17 +88,17 @@ export function forgetSite(site: string): ForgetResult {
   return { site: normalizeSite(site), deleted };
 }
 
-/** Un sitio con al menos una tool y cuántas tiene (de una fuente). */
+/** A site with at least one tool and how many it has (from one source). */
 export interface SiteSummary {
   site: string;
   count: number;
 }
 
 /**
- * Sitios que tienen al menos una tool en memoria LOCAL, con el conteo. Agrega el índice
- * por `site` normalizado (sin esquema/www/path). Composites sin `site` no se cuentan
- * (no son reconocibles por sitio). Lo usa la tool `list_sites` para responder "qué
- * sitios soportamos".
+ * Sites that have at least one tool in LOCAL memory, with the count. Aggregates the index
+ * by normalized `site` (without scheme/www/path). Composites without `site` are not counted
+ * (they're not recognizable by site). The `list_sites` tool uses it to answer "which
+ * sites do we support".
  */
 export function listSites(): SiteSummary[] {
   const counts = new Map<string, number>();
@@ -111,7 +111,7 @@ export function listSites(): SiteSummary[] {
   return [...counts.entries()].map(([site, count]) => ({ site, count }));
 }
 
-/** Un sitio soportado y de dónde salen sus tools (local, remoto o ambos). */
+/** A supported site and where its tools come from (local, remote or both). */
 export interface SiteListing {
   site: string;
   source: "local" | "remote" | "both";
@@ -119,9 +119,9 @@ export interface SiteListing {
 }
 
 /**
- * Mergea los sitios locales y remotos en una sola lista deduplicada por sitio. Marca el
- * origen (local / remote / both) y reporta el conteo de cada lado por separado (no los
- * suma: una misma tool puede estar en los dos). Ordena alfabético. Puro y testeable.
+ * Merges the local and remote sites into a single list deduplicated by site. Marks the
+ * origin (local / remote / both) and reports each side's count separately (it doesn't
+ * sum them: the same tool can be in both). Sorts alphabetically. Pure and testable.
  */
 export function mergeSites(local: SiteSummary[], remote: SiteSummary[]): SiteListing[] {
   const map = new Map<string, SiteListing>();
@@ -147,12 +147,12 @@ export function mergeSites(local: SiteSummary[], remote: SiteSummary[]): SiteLis
 }
 
 /**
- * Compila el criterio de match POR SITIO de una request (lista de sitios pedidos) en un
- * predicado reusable. Reduce AMBOS lados al "core": el término pedido y el site comparado.
- * Así "x.com", "www.x.com" y "x" colapsan al token "x" y matchean entre sí. Es la ÚNICA
- * fuente de verdad del match por sitio: la comparten el discover local (sobre el índice en
- * disco) y la resolución de sitios remotos (`matchRemoteSites`). Si no se pidió ningún
- * sitio el predicado es siempre falso.
+ * Compiles a request's match-BY-SITE criterion (list of requested sites) into a
+ * reusable predicate. Reduces BOTH sides to the "core": the requested term and the compared site.
+ * So "x.com", "www.x.com" and "x" collapse to the token "x" and match each other. It's the ONLY
+ * source of truth for the per-site match: it's shared by the local discover (over the on-disk
+ * index) and the resolution of remote sites (`matchRemoteSites`). If no site was
+ * requested, the predicate is always false.
  */
 export function siteMatcher(sites: string[]): (rawSite: string) => boolean {
   const requestedFull = new Set((sites ?? []).map(normalizeSite).filter(Boolean));
@@ -169,12 +169,12 @@ export function siteMatcher(sites: string[]): (rawSite: string) => boolean {
 }
 
 /**
- * Dado el término pedido y una lista de sitios CANDIDATOS (ej. los sitios del registro
- * remoto, vía `fetchRemoteSites`), devuelve qué sitios candidatos matchean — MISMO criterio
- * que el discover local: dominio completo normalizado o intersección de tokens core
- * ("x" ↔ "x.com"). El server remoto filtra por sitio EXACTO (no tokeniza), así que esto le
- * traduce el término pedido a los nombres de sitio reales antes de pedir el índice. Devuelve
- * sitios normalizados y deduplicados.
+ * Given the requested term and a list of CANDIDATE sites (e.g. the remote registry's
+ * sites, via `fetchRemoteSites`), returns which candidate sites match — SAME criterion
+ * as the local discover: full normalized domain or intersection of core tokens
+ * ("x" ↔ "x.com"). The remote server filters by EXACT site (it doesn't tokenize), so this
+ * translates the requested term into the real site names before requesting the index. Returns
+ * normalized and deduplicated sites.
  */
 export function matchRemoteSites(sites: string[], candidates: string[]): string[] {
   const matches = siteMatcher(sites);

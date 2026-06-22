@@ -20,20 +20,21 @@ import {
 } from "../config.js";
 
 /**
- * Dueño del ciclo de vida del Chrome único compartido (spec §4).
+ * Owner of the lifecycle of this server's dedicated Chrome (spec §4).
  *
- * Lanza UNA instancia de Chrome con perfil dedicado persistente y un puerto de
- * remote-debugging. Tanto el runner de este server (vía connectOverCDP) como
- * @playwright/mcp (vía --cdp-endpoint) se atachan al MISMO Chrome, así ven el
- * mismo estado: pestañas, DOM y sesión.
+ * Launches ONE Chrome instance with a persistent dedicated profile and an INTERNAL
+ * remote-debugging port. Both the replay runner (via connectOverCDP) and the exploration
+ * tools (browser/explore.ts) attach to the SAME Chrome, so they see the same state: tabs,
+ * DOM, and session. It's a dedicated Chrome: it doesn't touch the user's browser nor
+ * depend on any other browser server.
  *
- * Arranque idempotente: si ya hay un Chrome escuchando en el puerto, lo reusa en
- * vez de relanzar (evita el lock del perfil).
+ * Idempotent startup: if there's already a Chrome listening on the port, it reuses it
+ * instead of relaunching (avoids the profile lock).
  */
 
 let child: ChildProcess | undefined;
 
-/** Subdirectorios de caché que NO copiamos al sembrar (son la mayor parte del peso). */
+/** Cache subdirectories we do NOT copy when seeding (they are most of the weight). */
 const CACHE_DIRS = new Set([
   "Cache",
   "Code Cache",
@@ -50,25 +51,24 @@ const CACHE_DIRS = new Set([
 ]);
 
 /**
- * Siembra el perfil dedicado a partir del Chrome real del usuario — SOLO la primera
- * vez (si todavía no hay un Default). Copia las sesiones/cuentas (Cookies, Login Data,
- * Local Storage, etc.) salteando los cachés, y `Local State` para que el cifrado de
- * cookies sea coherente. Best-effort: si no hay perfil real, arrancamos vacío y el
- * usuario se loguea a mano una vez.
+ * Seeds the dedicated profile from the user's real Chrome — ONLY the first time (if there's
+ * no Default yet). Copies the sessions/accounts (Cookies, Login Data, Local Storage, etc.)
+ * skipping the caches, and `Local State` so cookie encryption is consistent. Best-effort: if
+ * there's no real profile, we start empty and the user logs in by hand once.
  */
 function seedProfileIfEmpty(): void {
   const dstDefault = join(paths.chromeProfile, "Default");
-  if (existsSync(dstDefault)) return; // ya sembrado / ya en uso: no tocar.
+  if (existsSync(dstDefault)) return; // already seeded / already in use: don't touch.
 
   const srcRoot = realChromeUserDataDir();
-  if (!srcRoot) return; // sin Chrome real detectable: arranca vacío.
-  const profile = resolveSeedProfile(srcRoot); // perfil más usado, no siempre "Default".
+  if (!srcRoot) return; // no detectable real Chrome: starts empty.
+  const profile = resolveSeedProfile(srcRoot); // most-used profile, not always "Default".
   const srcProfile = join(srcRoot, profile);
   if (!existsSync(srcProfile)) return;
 
   mkdirSync(paths.chromeProfile, { recursive: true });
-  // El perfil elegido (ej. "Profile 2") se copia SIEMPRE al "Default" del dir dedicado,
-  // que es el que Chrome usa al arrancar con --user-data-dir sin --profile-directory.
+  // The chosen profile (e.g. "Profile 2") is ALWAYS copied to the "Default" of the dedicated
+  // dir, which is the one Chrome uses when starting with --user-data-dir without --profile-directory.
   cpSync(srcProfile, dstDefault, {
     recursive: true,
     filter: (src) => !CACHE_DIRS.has(basename(src)),
@@ -79,33 +79,33 @@ function seedProfileIfEmpty(): void {
   }
   disableSessionRestore();
   process.stderr.write(
-    `[tool-memory] Perfil "${profile}" sembrado desde ${srcRoot} (cuentas logueadas, sin cachés).\n`,
+    `[tool-memory] Profile "${profile}" seeded from ${srcRoot} (logged-in accounts, no caches).\n`,
   );
 }
 
 /**
- * Bases de archivos SQLite de sesión/auth que refrescamos en cada re-seed. Por cada
- * base copiamos también sus sidecars (-wal, -shm, -journal): con el Chrome real ABIERTO
- * las cookies recién escritas viven en el -wal todavía sin volcar, así que copiar solo
- * el archivo principal daría una foto atrasada. Copiar los tres juntos preserva el estado.
+ * Base SQLite files for session/auth that we refresh on every re-seed. For each base we
+ * also copy its sidecars (-wal, -shm, -journal): with the real Chrome OPEN, freshly written
+ * cookies live in the -wal still unflushed, so copying only the main file would give a stale
+ * snapshot. Copying the three together preserves the state.
  */
 const AUTH_BASES = ["Cookies", "Login Data", "Web Data"];
 const SQLITE_SIDECARS = ["", "-wal", "-shm", "-journal"];
 const AUTH_FILES = AUTH_BASES.flatMap((b) => SQLITE_SIDECARS.map((s) => b + s));
-/** Directorios de sesión/auth (cookies modernas viven en Network/). */
+/** Session/auth directories (modern cookies live in Network/). */
 const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
 
 /**
- * Refresca SOLO los archivos de sesión/auth desde el Chrome real (no el perfil entero).
- * Pensado para correr en cada lanzamiento si reseedEnabled: arrastra logins nuevos
- * rápido y sin desgastar el disco. Best-effort: si no hay perfil sembrado todavía, lo
- * deja para seedProfileIfEmpty; si el Chrome real está abierto, copia el último estado
- * en disco (puede estar levemente atrás, pero no rompe).
+ * Refreshes ONLY the session/auth files from the real Chrome (not the whole profile).
+ * Meant to run on every launch if reseedEnabled: it carries over new logins quickly and
+ * without wearing the disk. Best-effort: if there's no seeded profile yet, it leaves it to
+ * seedProfileIfEmpty; if the real Chrome is open, it copies the latest on-disk state (which
+ * may be slightly behind, but doesn't break).
  */
 function reseedAuth(): void {
   const srcRoot = realChromeUserDataDir();
   if (!srcRoot) return;
-  const profile = resolveSeedProfile(srcRoot); // mismo perfil que el seed inicial.
+  const profile = resolveSeedProfile(srcRoot); // same profile as the initial seed.
   const srcProfile = join(srcRoot, profile);
   const dstDefault = join(paths.chromeProfile, "Default");
   if (!existsSync(srcProfile) || !existsSync(dstDefault)) return;
@@ -114,29 +114,29 @@ function reseedAuth(): void {
     const src = join(srcProfile, f);
     const dst = join(dstDefault, f);
     if (existsSync(src)) cpSync(src, dst);
-    else rmSync(dst, { force: true }); // si el real ya no tiene el sidecar, no dejes el viejo
+    else rmSync(dst, { force: true }); // if the real one no longer has the sidecar, don't keep the old
   }
   for (const d of AUTH_DIRS) {
     const src = join(srcProfile, d);
     if (!existsSync(src)) continue;
     const dst = join(dstDefault, d);
-    rmSync(dst, { recursive: true, force: true }); // evita mezclar leveldb viejo/nuevo
+    rmSync(dst, { recursive: true, force: true }); // avoids mixing old/new leveldb
     cpSync(src, dst, { recursive: true, filter: (p) => !CACHE_DIRS.has(basename(p)) });
   }
   const localState = join(srcRoot, "Local State");
   if (existsSync(localState)) {
-    cpSync(localState, join(paths.chromeProfile, "Local State")); // coherencia de cifrado
+    cpSync(localState, join(paths.chromeProfile, "Local State")); // encryption consistency
   }
   disableSessionRestore();
   process.stderr.write(
-    `[tool-memory] Auth re-sembrada (perfil "${profile}") desde ${srcRoot}.\n`,
+    `[tool-memory] Auth re-seeded (profile "${profile}") from ${srcRoot}.\n`,
   );
 }
 
 /**
- * Deja el perfil listo para arrancar SIN restaurar las pestañas viejas del usuario:
- * borra los archivos de sesión y fuerza "abrir nueva pestaña" + salida limpia en las
- * preferencias. Mantiene los datos (cookies/login); solo evita el ruido de tabs.
+ * Leaves the profile ready to start WITHOUT restoring the user's old tabs: deletes the
+ * session files and forces "open new tab" + clean exit in the preferences. Keeps the data
+ * (cookies/login); it only avoids the tab noise.
  */
 function disableSessionRestore(): void {
   const def = join(paths.chromeProfile, "Default");
@@ -154,11 +154,11 @@ function disableSessionRestore(): void {
     prefs.profile = { ...(prefs.profile ?? {}), exit_type: "Normal", exited_cleanly: true };
     writeFileSync(prefsPath, JSON.stringify(prefs));
   } catch {
-    // Preferences ilegible: no es fatal, Chrome lo regenera.
+    // unreadable Preferences: not fatal, Chrome regenerates it.
   }
 }
 
-/** ¿Hay ya un Chrome escuchando el endpoint CDP? */
+/** Is there already a Chrome listening on the CDP endpoint? */
 async function cdpAlive(): Promise<boolean> {
   try {
     const res = await fetch(`${cdpEndpoint}/json/version`, {
@@ -170,7 +170,7 @@ async function cdpAlive(): Promise<boolean> {
   }
 }
 
-/** Espera hasta que el endpoint CDP responda (o se agote el timeout). */
+/** Waits until the CDP endpoint responds (or the timeout runs out). */
 async function waitForCdp(timeoutMs = 15000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -178,13 +178,13 @@ async function waitForCdp(timeoutMs = 15000): Promise<void> {
     await new Promise((r) => setTimeout(r, 250));
   }
   throw new Error(
-    `Chrome no levantó el endpoint CDP en ${cdpEndpoint} tras ${timeoutMs}ms`,
+    `Chrome did not bring up the CDP endpoint at ${cdpEndpoint} after ${timeoutMs}ms`,
   );
 }
 
 export interface SharedChrome {
   cdpEndpoint: string;
-  /** true si ya estaba corriendo y lo reusamos (no lo matamos al cerrar). */
+  /** true if it was already running and we reuse it (we don't kill it on close). */
   reused: boolean;
 }
 
@@ -193,9 +193,9 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
     return { cdpEndpoint, reused: true };
   }
 
-  // Primera vez: sembramos el perfil con las cuentas del Chrome real del usuario.
+  // First time: we seed the profile with the accounts from the user's real Chrome.
   seedProfileIfEmpty();
-  // Cada lanzamiento (1 vez por sesión, lazy): refrescamos auth si está habilitado.
+  // Each launch (once per session, lazy): we refresh auth if enabled.
   if (reseedEnabled) reseedAuth();
 
   mkdirSync(paths.chromeProfile, { recursive: true });
@@ -206,14 +206,14 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
     `--user-data-dir=${paths.chromeProfile}`,
     "--no-first-run",
     "--no-default-browser-check",
-    // Una pestaña inicial estable para atacharse.
+    // A stable initial tab to attach to.
     "about:blank",
   ];
 
   if (bin) {
     child = spawn(bin, args, { stdio: "ignore", detached: false });
   } else {
-    // Sin Chrome del sistema: usamos el chromium de Playwright como binario.
+    // No system Chrome: we use Playwright's chromium as the binary.
     child = spawn(chromium.executablePath(), args, {
       stdio: "ignore",
       detached: false,
@@ -228,7 +228,7 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
   return { cdpEndpoint, reused: false };
 }
 
-/** Cierra el Chrome solo si lo lanzamos nosotros. */
+/** Closes Chrome only if we launched it ourselves. */
 export function stopSharedChrome(): void {
   if (child && !child.killed) {
     child.kill();

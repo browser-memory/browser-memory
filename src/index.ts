@@ -8,6 +8,10 @@ import { join } from "node:path";
 import { launchSharedChrome, stopSharedChrome } from "./browser/chrome.js";
 import { disconnectReplay, captureScreenshotsInto } from "./browser/connect.js";
 import { startNetLog, getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
+import { getConsoleLog, clearConsoleLog, pickConsole } from "./browser/console-log.js";
+import * as explore from "./browser/explore.js";
+import { bmHandler } from "./browser/bm-handler.js";
+import { paths } from "./config.js";
 import {
   discover,
   matchRemoteSites,
@@ -37,48 +41,53 @@ import {
 import { runCli } from "./cli.js";
 
 /**
- * Entry MCP (stdio). Registra discover / run / save (spec §5). Es dueño del ciclo
- * de vida del Chrome compartido: lo levanta al iniciar (spec §4).
+ * MCP entry (stdio). Registers discover / run / save (spec §5). Owns the lifecycle
+ * of the shared Chrome: it launches it on startup (spec §4).
  */
 
 /**
- * Protocolo que el server le declara al host vía el handshake MCP (`instructions`).
- * Se inyecta en el contexto del modelo al conectar — instala el loop discover → run
- * → request SIN tocar el CLAUDE.md del usuario. Viaja dentro del paquete: funciona para
- * todo el mundo, cero config. (Es un hint del protocolo; Claude Code lo respeta.)
+ * Protocol the server declares to the host via the MCP handshake (`instructions`).
+ * It is injected into the model's context on connect — it installs the discover → run
+ * → request loop WITHOUT touching the user's CLAUDE.md. It travels inside the package: it
+ * works for everyone, zero config. (It is a protocol hint; Claude Code respects it.)
  */
 const INSTRUCTIONS = `
-Este server te da una MEMORIA de acciones web reutilizables, compartiendo un único
-Chrome con el server "playwright" (vía CDP: lo que hace uno lo ve el otro al instante).
+This server gives you a MEMORY of reusable web actions and ALSO controls its own
+dedicated Chrome (its own profile, internal port) to explore and learn — you don't need
+any other browser server.
 
-SEGUÍ SIEMPRE este loop cuando una tarea implique operar un sitio web:
+ALWAYS FOLLOW this loop when a task involves operating a website:
 
-1. ANTES de explorar con el browser → llamá a \`discover(sites)\` pasando el/los
-   sitio(s) de la tarea (ej. ["infobae"] o ["airbnb","booking"]). Devuelve TODAS las
-   tools de esos sitios (incluida login/auth): elegí la que corresponde por su intent
-   y EJECUTALA con \`run\` en vez de explorar. No abras el navegador a mano si ya hay
-   un tool que sirve.
+1. BEFORE exploring with the browser → call \`discover(sites)\` passing the
+   site(s) of the task (e.g. ["infobae"] or ["airbnb","booking"]). It returns ALL the
+   tools for those sites (login/auth included): pick the right one by its intent
+   and RUN IT with \`run\` instead of exploring. Don't open the browser by hand if there's
+   already a tool that does the job.
 
-2. Si NO hay tool (discover vacío) → resolvé la tarea de verdad con el server
-   "playwright" (snapshot, navigate, click...). Cuando termine BIEN, capturá el
-   aprendizaje con \`request(goal, narration, network)\`:
-   - narration: los pasos canónicos que funcionaron (intent + action + selector/url/
-     value), separando la señal del ruido de exploración (sin backtracks).
-   - network: la salida de browser_network_requests (sirve para detectar un endpoint
-     HTTP directo, más robusto que la UI).
-   request devuelve { status: "pending_distill", suggested_prompt, trace_path }. Acto
-   seguido SPAWNEÁ UN SUBAGENTE EN BACKGROUND con ese suggested_prompt: destila la
-   trace y guarda el/los tool(s) con \`save\`. El distill no toca el navegador.
+2. If there is NO tool (discover empty) → solve the task by exploring with THIS server's
+   \`bm_*\` tools: \`bm_navigate(url)\`, \`bm_snapshot()\`, \`bm_click(ref)\`,
+   \`bm_type(ref, text)\`, \`bm_press_key\`, \`bm_wait_for\`, etc. The snapshot returns the
+   accessibility tree with \`[ref=eN]\` refs: pass THOSE refs to click/type. Each action
+   returns the REAL \`cssSelector\` of the node you touched — use that CSS selector in the
+   narration, NEVER the ref (refs are ephemeral and can't be saved). When the task
+   finishes WELL, capture the learning with \`request(goal, narration)\`:
+   - narration: the canonical steps that worked (intent + action + cssSelector/url/
+     value), separating the signal from the exploration noise (no backtracks).
+   - you don't need to pass the network: this server already records it on its own (look at it
+     with \`bm_network\` to detect a direct HTTP endpoint, more robust than the UI).
+   request returns { status: "pending_distill", suggested_prompt, trace_path }. Right
+   after that SPAWN A BACKGROUND SUBAGENT with that suggested_prompt: it distills the
+   trace and saves the tool(s) with \`save\`. The distiller never touches the browser.
 
-3. \`run(name, params)\` devuelve DATOS, no instrucciones. El cálculo o la decisión
-   sobre esos datos es tuya. Errores tipados:
-   - re-auth  → sesión vencida: re-logueate (login manual). NO re-aprendas.
-   - no-aplica → no corresponde (sin permiso / no existe): reportá y pará.
-   - tool-roto → selector/API cambió: re-aprendé desde una trace nueva.
+3. \`run(name, params)\` returns DATA, not instructions. Any computation or decision
+   over that data is yours. Typed errors:
+   - re-auth  → expired session: re-login (manual login). Do NOT re-learn.
+   - not-applicable → doesn't apply (no permission / doesn't exist): report and stop.
+   - tool-broken → selector/API changed: re-learn from a fresh trace.
 
-Reglas: parametrizá lo que varíe (q, hours), no lo hardcodees. Secretos nunca en
-tools/traces. write-irreversible (mandar, pagar) NO tiene gate de confirmación todavía:
-cada run ejecuta de verdad — confirmá con el usuario antes de reproducir una.
+Rules: parametrize whatever varies (q, hours), don't hardcode it. Secrets never go in
+tools/traces. write-irreversible (sending, paying) has NO confirmation gate yet:
+every run executes for real — confirm with the user before replaying one.
 `.trim();
 
 const server = new McpServer(
@@ -86,30 +95,30 @@ const server = new McpServer(
   { instructions: INSTRUCTIONS },
 );
 
-/** Mensaje al agente cuando el límite de uso remoto se alcanzó (HTTP 429). */
+/** Message to the agent when the remote usage limit is hit (HTTP 429). */
 function rateLimitNotice(e: RegistryRateLimitError): string {
-  const when = e.retryAfterSeconds ? ` Reintentá en ~${e.retryAfterSeconds}s.` : "";
-  return `Límite de uso del registro remoto alcanzado.${when} Por ahora solo tools locales.`;
+  const when = e.retryAfterSeconds ? ` Retry in ~${e.retryAfterSeconds}s.` : "";
+  return `Remote registry usage limit reached.${when} For now, local tools only.`;
 }
 
 /**
- * Mensaje al agente cuando hace falta loguearse (no bloqueante): le pasamos el LINK para que
- * el usuario autorice y le decimos que reintente. La key se reclama sola en el reintento.
+ * Message to the agent when a login is needed (non-blocking): we pass the LINK so the
+ * user can authorize and we tell them to retry. The key is claimed on its own on retry.
  */
 function loginNotice(o: Exclude<DeviceLoginOutcome, { status: "authorized" }>): string {
   if (o.status === "unavailable") {
-    return "No pude iniciar sesión con el registro remoto (¿server caído?). Por ahora solo tools locales.";
+    return "Couldn't sign in with the remote registry (server down?). For now, local tools only.";
   }
-  const code = o.userCode ? ` (código ${o.userCode})` : "";
+  const code = o.userCode ? ` (code ${o.userCode})` : "";
   return (
-    `Necesitás loguearte para usar las tools remotas: abrí ${o.verificationUrl} y autorizá${code}. ` +
-    `Después volvé a pedir lo mismo y se conecta solo.`
+    `You need to log in to use the remote tools: open ${o.verificationUrl} and authorize${code}. ` +
+    `Then ask for the same thing again and it connects on its own.`
   );
 }
 
-/** Carga los candidatos REMOTOS de los sitios pedidos (sitios → índice → Candidate[]). */
+/** Loads the REMOTE candidates for the requested sites (sites → index → Candidate[]). */
 async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
-  // El server filtra por sitio EXACTO: traducimos el término al nombre real (matchRemoteSites).
+  // the server filters by EXACT site: we translate the term into the real name (matchRemoteSites).
   const remoteSiteList = await fetchRemoteSites();
   const remoteTargets = matchRemoteSites(
     sites,
@@ -130,10 +139,10 @@ async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
 }
 
 /**
- * Resuelve los candidatos remotos manejando el gating (NO bloqueante): 401 → intenta avanzar
- * el device-login; si ya autorizó, reintenta y devuelve remoto; si está pendiente, vuelve sin
- * remoto + notice con el LINK. 429 → sin remoto + notice. Nunca lanza: las tools LOCALES
- * siempre se devuelven igual.
+ * Resolves the remote candidates handling the gating (NON-blocking): 401 → tries to advance
+ * the device-login; if already authorized, retries and returns remote; if pending, returns without
+ * remote + notice with the LINK. 429 → no remote + notice. Never throws: the LOCAL tools
+ * are always returned regardless.
  */
 async function remoteCandidatesGated(
   sites: string[],
@@ -150,7 +159,7 @@ async function remoteCandidatesGated(
           if (e2 instanceof RegistryRateLimitError) {
             return { remote: [], notice: rateLimitNotice(e2), gated: true };
           }
-          return { remote: [] }; // raro post-login: degradamos (muestra locales).
+          return { remote: [] }; // rare post-login: we degrade (show locals).
         }
       }
       return { remote: [], notice: loginNotice(outcome), gated: true };
@@ -158,14 +167,14 @@ async function remoteCandidatesGated(
     if (e instanceof RegistryRateLimitError) {
       return { remote: [], notice: rateLimitNotice(e), gated: true };
     }
-    throw e; // inesperado: el client ya degrada 5xx/timeout a [] sin lanzar.
+    throw e; // unexpected: the client already degrades 5xx/timeout to [] without throwing.
   }
 }
 
 /**
- * resolveItem manejando el gating (NO bloqueante). Devuelve el item resuelto, o un `notice`
- * (login pendiente / límite) para que el handler de run corte mostrándolo. Re-lanza el "no
- * existe" para que run() lo reporte como no-aplica.
+ * resolveItem handling the gating (NON-blocking). Returns the resolved item, or a `notice`
+ * (login pending / limit) so the run handler bails out showing it. Re-throws "doesn't
+ * exist" so run() reports it as not-applicable.
  */
 async function resolveWithGate(
   name: string,
@@ -183,20 +192,20 @@ async function resolveWithGate(
           if (e2 instanceof RegistryAuthError) {
             return {
               notice:
-                "Te autoricé pero el registro sigue rechazando la key. Reintentá o regenerá la key en /app.",
+                "I authorized you but the registry keeps rejecting the key. Retry or regenerate the key at /app.",
             };
           }
-          throw e2; // "no existe"
+          throw e2; // "doesn't exist"
         }
       }
       return { notice: loginNotice(outcome) };
     }
     if (e instanceof RegistryRateLimitError) return { notice: rateLimitNotice(e) };
-    throw e; // "no existe" → run()/runComposite() lo reportan como no-aplica.
+    throw e; // "doesn't exist" → run()/runComposite() report it as not-applicable.
   }
 }
 
-/** Resultado MCP de un run cortado por gating (login pendiente / límite): solo el aviso. */
+/** MCP result for a run cut short by gating (login pending / limit): just the notice. */
 function gateResult(notice: string): {
   content: { type: "text"; text: string }[];
   isError: true;
@@ -206,35 +215,35 @@ function gateResult(notice: string): {
 
 server.tool(
   "discover",
-  "PRIMER PASO de toda tarea web: llamá a discover ANTES de abrir el browser. El " +
-    "matcheo es POR SITIO: pasá el/los sitio(s) de la tarea (marca o dominio, ej. " +
-    "['infobae'], ['airbnb','booking']) y devuelve TODAS las tools de esos sitios " +
-    "— incluidas login/auth — con los composites primero. Elegí la que corresponde por " +
-    "su intent y, si hace falta, corré antes su login. Si ninguno de los sitios está en " +
-    "memoria vuelve VACÍO: ahí no hay nada aprendido, explorá con playwright y después " +
-    "capturá con request() para aprender tools nuevas.",
+  "FIRST STEP of every web task: call discover BEFORE opening the browser. The " +
+    "matching is BY SITE: pass the site(s) of the task (brand or domain, e.g. " +
+    "['infobae'], ['airbnb','booking']) and it returns ALL the tools for those sites " +
+    "— login/auth included — with the composites first. Pick the right one by " +
+    "its intent and, if needed, run its login first. If none of the sites is in " +
+    "memory it returns EMPTY: there's nothing learned there, explore with playwright and then " +
+    "capture with request() to learn new tools.",
   {
     sites: z
       .array(z.string())
-      .describe("sitio(s) de la tarea: marca o dominio, ej. ['infobae'] o ['airbnb','booking']"),
+      .describe("site(s) of the task: brand or domain, e.g. ['infobae'] or ['airbnb','booking']"),
   },
   async ({ sites }) => {
-    // 1. Remoto: el server es la fuente de verdad (oferta curada). El índice ya trae los
-    //    nombres de params, así que no hace falta leer el item. El gating se maneja en
-    //    remoteCandidatesGated; un backend caído degrada a [] sin lanzar.
+    // 1. remote: the server is the source of truth (curated offering). The index already carries the
+    //    param names, so there's no need to read the item. Gating is handled in
+    //    remoteCandidatesGated; a downed backend degrades to [] without throwing.
     const { remote, notice, gated } = await remoteCandidatesGated(sites);
 
-    // GATE DURO: sin sesión válida (login pendiente / key inválida / rate-limit) NO devolvemos
-    // ninguna tool — ni local ni remota —, solo el aviso. Tampoco abrimos Chrome: no hay tarea
-    // que preparar hasta que el usuario se loguee.
+    // HARD GATE: without a valid session (login pending / invalid key / rate-limit) we return NO
+    // tool — neither local nor remote —, just the notice. We also don't open Chrome: there's no task
+    // to prepare until the user logs in.
     if (gated) {
-      return { content: [{ type: "text", text: notice ?? "Sesión con el registro requerida." }] };
+      return { content: [{ type: "text", text: notice ?? "Registry session required." }] };
     }
 
     const remoteNames = new Set(remote.map((e) => e.name));
 
-    // 2. Local: SOLO las que el server no tiene. Dedup por name: GANA el server.
-    //    Enriquecemos los params reales leyendo el item (requires.params o params).
+    // 2. local: ONLY the ones the server doesn't have. Dedup by name: the server WINS.
+    //    We enrich the real params by reading the item (requires.params or params).
     const local: Candidate[] = discover(sites)
       .filter((c) => !remoteNames.has(c.name))
       .map((c) => {
@@ -251,26 +260,26 @@ server.tool(
 
     const candidates = sortCompositesFirst([...remote, ...local]);
 
-    // "Se quiso hacer algo y no hay tool (ni local ni remoto)": señal de demanda no cubierta.
+    // "someone wanted to do something and there's no tool (neither local nor remote)": signal of unmet demand.
     if (candidates.length === 0) {
       logEvent({ event_type: "discover_miss", sites });
     }
-    // Todo discover marca el INICIO de una tarea nueva: levantamos Chrome (best-effort) y
-    // reseteamos+arrancamos el grabador de red SIEMPRE, haya tools o no. Así, aunque el
-    // agente corra una tool conocida y DESPUÉS explore una acción nueva en el mismo sitio,
-    // su red queda grabada (no dependemos de re-entrar por el branch "sin candidatos").
-    // Sobrevive redirects, a diferencia del snapshot del agente. Idempotente: si Chrome ya
-    // está vivo es un fast-path; si no, adelanta el launch que igual haría run().
+    // every discover marks the START of a new task: we launch Chrome (best-effort) and
+    // reset+start the network recorder ALWAYS, whether there are tools or not. This way, even if the
+    // agent runs a known tool and THEN explores a new action on the same site,
+    // its network is recorded (we don't depend on re-entering through the "no candidates" branch).
+    // It survives redirects, unlike the agent's snapshot. Idempotent: if Chrome is already
+    // alive it's a fast-path; if not, it gets ahead of the launch run() would do anyway.
     try {
       await launchSharedChrome();
       await startNetLog();
     } catch (e) {
       process.stderr.write(
-        `[tool-memory] no pude prelanzar Chrome / iniciar el grabador: ${(e as Error).message}\n`,
+        `[tool-memory] couldn't pre-launch Chrome / start the recorder: ${(e as Error).message}\n`,
       );
     }
-    // Si el gating dejó un aviso (login pendiente / límite), lo anteponemos como bloque de
-    // texto aparte; los candidatos siguen yendo como JSON parseable en el segundo bloque.
+    // if the gating left a notice (login pending / limit), we prepend it as a separate
+    // text block; the candidates still go as parseable JSON in the second block.
     const content: { type: "text"; text: string }[] = [];
     if (notice) content.push({ type: "text", text: notice });
     content.push({ type: "text", text: JSON.stringify(candidates, null, 2) });
@@ -280,16 +289,16 @@ server.tool(
 
 server.tool(
   "list_sites",
-  "Lista TODOS los sitios que tienen al menos una tool en memoria — los del registro " +
-    "REMOTO (oferta curada del server) y los LOCALES del usuario, deduplicados por sitio. " +
-    "Usala para responder 'qué sitios soportamos de forma nativa'. NO toca el browser ni " +
-    "necesita params. Cada sitio trae su `source` (local / remote / both) y el conteo de " +
-    "tools de cada lado.",
+  "Lists ALL the sites that have at least one tool in memory — the ones from the " +
+    "REMOTE registry (the server's curated offering) and the user's LOCAL ones, deduplicated by site. " +
+    "Use it to answer 'which sites do we support natively'. It does NOT touch the browser nor " +
+    "needs params. Each site carries its `source` (local / remote / both) and the count of " +
+    "tools on each side.",
   {},
   async () => {
-    // Remoto best-effort: si el backend está caído devuelve []. Y si gatea (401 sin key /
-    // 429), degradamos a SOLO local sin lanzar — list_sites es informativo, no vale la pena
-    // colgar un login de 5 min ni romper la llamada por un sitio que listar.
+    // remote best-effort: if the backend is down it returns []. And if it gates (401 without key /
+    // 429), we degrade to LOCAL only without throwing — list_sites is informative, it's not worth
+    // hanging on a 5-min login nor breaking the call over a site to list.
     let remote: Awaited<ReturnType<typeof fetchRemoteSites>> = [];
     try {
       remote = await fetchRemoteSites();
@@ -311,57 +320,57 @@ server.tool(
 
 server.tool(
   "forget_site",
-  "Borra de la memoria LOCAL todas las tools de un sitio (mismo matching por marca/" +
-    "dominio que discover: 'wikipedia' → es.wikipedia.org). Usala cuando el usuario pida " +
-    "'eliminá X de los sitios disponibles'. Es DIRECTO e IRREVERSIBLE: no hay papelera ni " +
-    "undo — confirmá con el usuario antes de llamarla. NO toca el registro remoto (la " +
-    "oferta curada del server se cura aparte): si el sitio existe solo en remoto, " +
-    "`deleted` vuelve vacío.",
+  "Deletes from LOCAL memory all the tools of a site (same brand/" +
+    "domain matching as discover: 'wikipedia' → es.wikipedia.org). Use it when the user asks to " +
+    "'remove X from the available sites'. It's DIRECT and IRREVERSIBLE: there's no trash bin nor " +
+    "undo — confirm with the user before calling it. It does NOT touch the remote registry (the " +
+    "server's curated offering is curated separately): if the site exists only in remote, " +
+    "`deleted` comes back empty.",
   {
-    site: z.string().describe("sitio a olvidar: marca o dominio, ej. 'wikipedia' o 'es.wikipedia.org'"),
+    site: z.string().describe("site to forget: brand or domain, e.g. 'wikipedia' or 'es.wikipedia.org'"),
   },
   async ({ site }) => {
     const res = forgetSite(site);
     const text = res.deleted.length
-      ? `Borradas ${res.deleted.length} tool(s) locales de '${res.site}': ${res.deleted.join(", ")}.`
-      : `No había tools locales para '${res.site}' (puede existir solo en el registro remoto, que no se toca desde acá).`;
+      ? `Deleted ${res.deleted.length} local tool(s) for '${res.site}': ${res.deleted.join(", ")}.`
+      : `There were no local tools for '${res.site}' (it may exist only in the remote registry, which isn't touched from here).`;
     return { content: [{ type: "text", text }] };
   },
 );
 
 server.tool(
   "run",
-  "Ejecuta un tool de la memoria de forma determinista (sin modelo en el medio) y " +
-    "devuelve DATOS estructurados. Verifica precondiciones de entorno y la " +
-    "success_assertion. Errores tipados: re-auth (re-loguearse), no-aplica (no " +
-    "corresponde), tool-roto (regenerar con request).",
+  "Runs a tool from memory deterministically (no model in the loop) and " +
+    "returns structured DATA. It checks environment preconditions and the " +
+    "success_assertion. Typed errors: re-auth (re-login), not-applicable (doesn't " +
+    "apply), tool-broken (re-learn with request).",
   {
-    name: z.string().describe("nombre del tool o composite"),
-    params: z.record(z.unknown()).optional().describe("params/handles del tool"),
+    name: z.string().describe("name of the tool or composite"),
+    params: z.record(z.unknown()).optional().describe("params/handles of the tool"),
   },
   async ({ name, params }) => {
-    // Resolución unificada (Opción A) para decidir el dispatch y conocer el origen.
-    // La cache hace barata esta resolución y la de adentro de run/runComposite.
-    // Si la tool es EXCLUSIVAMENTE remota, resolveItem puede tirar gating (las locales
-    // caen a disco sin lanzar): 401 → login + reintento; 429 → cortamos con notice.
+    // unified resolution (Option A) to decide the dispatch and know the origin.
+    // the cache makes this resolution and the one inside run/runComposite cheap.
+    // if the tool is EXCLUSIVELY remote, resolveItem may throw gating (the local ones
+    // fall to disk without throwing): 401 → login + retry; 429 → bail out with notice.
     let composite = false;
     let source: "local" | "remote" = "local";
     try {
       const gate = await resolveWithGate(name);
-      if (gate.notice) return gateResult(gate.notice); // login pendiente / límite: no ejecutamos.
+      if (gate.notice) return gateResult(gate.notice); // login pending / limit: we don't run.
       if (gate.resolved) {
         composite = isComposite(gate.resolved.item);
         source = isRemoteSource(gate.resolved.source) ? "remote" : "local";
       }
     } catch {
-      // no existe en ningún lado; run()/runComposite() lo reportan como no-aplica.
+      // doesn't exist anywhere; run()/runComposite() report it as not-applicable.
     }
     const res = composite
       ? await runComposite(name, params ?? {})
       : await run(name, params ?? {});
 
-    // tool_run: UN evento por llamada top-level (un composite = 1 acá; sus pasos los
-    // loguea compose.ts como tool_step).
+    // tool_run: ONE event per top-level call (a composite = 1 here; its steps are
+    // logged by compose.ts as tool_step).
     logEvent({
       event_type: "tool_run",
       tool_name: name,
@@ -383,19 +392,19 @@ server.tool(
 
 server.tool(
   "save",
-  "Guarda (o reemplaza) un tool primitivo o un composite en la memoria. Antes de " +
-    "persistir valida esquema + lint estático del cableado de params. Para tools de " +
-    "LECTURA, pasá `verify_with` con los params concretos de la trace: el server hace " +
-    "un smoke-run real y RECHAZA el tool si no devuelve resultado (caza el caso de un " +
-    "param que no llega y un extractor que igual devuelve algo). Lo usa el distiller.",
+  "Saves (or replaces) a primitive tool or a composite in memory. Before " +
+    "persisting it validates schema + static lint of the param wiring. For READ " +
+    "tools, pass `verify_with` with the concrete params from the trace: the server does " +
+    "a real smoke-run and REJECTS the tool if it returns no result (catches the case of a " +
+    "param that doesn't arrive and an extractor that returns something anyway). The distiller uses it.",
   {
-    tool: z.record(z.unknown()).describe("el objeto Tool (§10.1) o Composite (§10.2)"),
+    tool: z.record(z.unknown()).describe("the Tool (§10.1) or Composite (§10.2) object"),
     verify_with: z
       .record(z.unknown())
       .optional()
       .describe(
-        "params concretos (de la trace) para el smoke-run de verificación. Solo aplica " +
-          "a primitivas de lectura; en writes se ignora (no se puede probar sin efecto).",
+        "concrete params (from the trace) for the verification smoke-run. Only applies " +
+          "to read primitives; on writes it's ignored (can't be tested without effect).",
       ),
   },
   async ({ tool, verify_with }) => {
@@ -403,9 +412,9 @@ server.tool(
     try {
       saved = saveItem(tool);
     } catch (e) {
-      // No logueamos saves fallidos: el log solo guarda lo que funcionó bien.
+      // we don't log failed saves: the log only stores what worked well.
       return {
-        content: [{ type: "text", text: `Inválido: ${(e as Error).message}` }],
+        content: [{ type: "text", text: `Invalid: ${(e as Error).message}` }],
         isError: true,
       };
     }
@@ -415,21 +424,21 @@ server.tool(
       ? Object.keys(saved.params)
       : Object.keys(saved.requires.params);
 
-    // Smoke-run: SOLO primitivas de lectura (un write ejecutaría el efecto de verdad).
+    // smoke-run: ONLY read primitives (a write would execute the effect for real).
     if (verify_with && !isComposite(saved) && saved.side_effect === "read") {
       const res = await run(saved.name, verify_with);
       if (!res.ok || res.result == null) {
-        removeItem(saved.name); // revertimos: un tool que no verifica no queda en memoria.
-        const why = res.ok ? "el extractor devolvió null/sin dato" : res.error?.message;
-        // No logueamos el rechazo: el log solo guarda lo que funcionó bien.
+        removeItem(saved.name); // we revert: a tool that doesn't verify doesn't stay in memory.
+        const why = res.ok ? "the extractor returned null/no data" : res.error?.message;
+        // we don't log the rejection: the log only stores what worked well.
         return {
           content: [
             {
               type: "text",
               text:
-                `Rechazado por smoke-run: '${saved.name}' no produjo resultado con ` +
-                `${JSON.stringify(verify_with)} — ${why}. El tool NO se guardó; revisá ` +
-                `el cableado de params (URL/extractor) y volvé a guardar.`,
+                `Rejected by smoke-run: '${saved.name}' produced no result with ` +
+                `${JSON.stringify(verify_with)} — ${why}. The tool was NOT saved; check ` +
+                `the param wiring (URL/extractor) and save again.`,
             },
           ],
           isError: true,
@@ -447,7 +456,7 @@ server.tool(
         content: [
           {
             type: "text",
-            text: `Guardado y verificado: ${saved.name} (${saved.type} v${saved.version}) — smoke-run OK.`,
+            text: `Saved and verified: ${saved.name} (${saved.type} v${saved.version}) — smoke-run OK.`,
           },
         ],
       };
@@ -463,7 +472,7 @@ server.tool(
     });
     return {
       content: [
-        { type: "text", text: `Guardado: ${saved.name} (${saved.type} v${saved.version})` },
+        { type: "text", text: `Saved: ${saved.name} (${saved.type} v${saved.version})` },
       ],
     };
   },
@@ -471,57 +480,220 @@ server.tool(
 
 server.tool(
   "request",
-  "ÚLTIMO PASO cuando hiciste una acción web NUEVA con el browser y salió BIEN: " +
-    "llamá a request para no tener que re-descubrirla la próxima. NO bloquea: persiste " +
-    "la trace congelada y devuelve `pending_distill` con un `suggested_prompt`. " +
-    "CONTRATO OBLIGATORIO: al recibirlo, spawneá un SUBAGENTE EN BACKGROUND con ese " +
-    "prompt; el subagente destila la trace y guarda los tools vía `save`. El distill " +
-    "no toca el navegador.",
+  "LAST STEP when you did a NEW web action with the browser and it went WELL: " +
+    "call request so you don't have to re-discover it next time. It does NOT block: it persists " +
+    "the frozen trace and returns `pending_distill` with a `suggested_prompt`. " +
+    "MANDATORY CONTRACT: on receiving it, spawn a BACKGROUND SUBAGENT with that " +
+    "prompt; the subagent distills the trace and saves the tools via `save`. The distiller " +
+    "never touches the browser.",
   {
-    goal: z.string().describe("el objetivo que se logró, en lenguaje natural"),
+    goal: z.string().describe("the goal that was achieved, in natural language"),
     narration: z
       .record(z.unknown())
       .describe(
-        "objeto con { steps: [{ intent?, action, url?, selector?, value? }, ...] } — " +
-          "los pasos canónicos del camino exitoso. `action` es un label libre " +
-          "(navigate, click, type, parse, extract...). NO hace falta repetir goal/site " +
-          "adentro: se completan solos. Opcional: reader_fn, api_candidate.",
+        "object with { steps: [{ intent?, action, url?, selector?, value? }, ...] } — " +
+          "the canonical steps of the successful path. `action` is a free label " +
+          "(navigate, click, type, parse, extract...). No need to repeat goal/site " +
+          "inside: they're filled in on their own. Optional: reader_fn, api_candidate.",
       ),
-    network: z.unknown().optional().describe("salida de browser_network_requests"),
-    console: z.unknown().optional().describe("salida de browser_console_messages"),
+    network: z
+      .unknown()
+      .optional()
+      .describe("optional: this server already records the network on its own. Only if you want to annotate something extra (see bm_network)."),
+    console: z
+      .unknown()
+      .optional()
+      .describe("optional: this server already captures the console on its own (see bm_console)."),
   },
   async ({ goal, narration, network, console }) => {
     try {
-      // La captura continua del server (CDP, completa) manda; el snapshot del agente se
-      // mergea encima por sus anotaciones de `role`. Así el distiller ve TODOS los networks.
+      // the server's continuous capture (CDP, complete) wins; whatever the agent passes is
+      // merged on top for its `role` annotations. This way the distiller sees ALL the networks.
       const mergedNetwork = mergeNetwork(getNetLog(), network);
-      const signal = learn({ goal, narration, network: mergedNetwork, console });
-      // Congelamos screenshots del estado final "por las dudas" (best-effort, no bloquea).
+      // console: use the agent's only if it brought something; otherwise the server-captured
+      // one (avoids a `console: []` silently discarding the internal capture).
+      const mergedConsole = pickConsole(console, getConsoleLog());
+      const signal = learn({ goal, narration, network: mergedNetwork, console: mergedConsole });
+      // we freeze screenshots of the final state "just in case" (best-effort, non-blocking).
       await captureScreenshotsInto(join(signal.trace_path, "screenshots"));
-      // Episodio congelado: vaciamos el buffer para que la próxima tarea arranque limpia.
-      // (Si learn() hubiera fallado, no llegamos acá y la exploración sigue grabada para reintentar.)
+      // frozen episode: we empty the buffers so the next task starts clean.
+      // (if learn() had failed, we don't get here and the exploration stays recorded to retry.)
       clearNetLog();
+      clearConsoleLog();
       return { content: [{ type: "text", text: JSON.stringify(signal, null, 2) }] };
     } catch (e) {
       return {
-        content: [{ type: "text", text: `request inválido: ${(e as Error).message}` }],
+        content: [{ type: "text", text: `invalid request: ${(e as Error).message}` }],
         isError: true,
       };
     }
   },
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// EXPLORATION tools (bm_ prefix): they replace @playwright/mcp to learn NEW
+// web actions, all inside this server. They operate on the shared dedicated Chrome
+// (the same session the user sees). The bm_ prefix avoids clashing with
+// @playwright/mcp's `browser_*` tools if the user has it installed separately.
+// ─────────────────────────────────────────────────────────────────────────────
+
+server.tool(
+  "bm_navigate",
+  "Navigates the active exploration page to a URL and returns { url, title, snapshot } " +
+    "(snapshot = accessibility tree with [ref=eN] refs). Use this instead of opening the " +
+    "browser by hand when discover didn't bring back a tool.",
+  { url: z.string().describe("absolute URL to navigate to") },
+  ({ url }) => bmHandler(() => explore.navigate(url))(),
+);
+
+server.tool(
+  "bm_snapshot",
+  "Returns the accessibility snapshot of the active page with [ref=eN] refs (includes " +
+    "iframes) + url/title. The refs are used for bm_click/bm_type and are EPHEMERAL: take a " +
+    "new one after each action that changes the page.",
+  {},
+  bmHandler(() => explore.snapshot()),
+);
+
+server.tool(
+  "bm_click",
+  "Clicks the element of the given ref (from the last snapshot) and returns { ok, cssSelector, " +
+    "snapshot }. `cssSelector` is the REAL resolved CSS selector of the node: use THAT in the " +
+    "request narration, not the ref.",
+  {
+    ref: z.string().describe("snapshot ref, e.g. 'e12'"),
+    element: z.string().optional().describe("human description of the element (readability only)"),
+  },
+  ({ ref }) => bmHandler(() => explore.clickRef(ref))(),
+);
+
+server.tool(
+  "bm_type",
+  "Types `text` into the field of the given ref and returns { ok, cssSelector, snapshot }. With " +
+    "`submit: true` it presses Enter afterwards (useful for search boxes). Use `cssSelector` in the " +
+    "narration, not the ref.",
+  {
+    ref: z.string().describe("ref of the field, e.g. 'e7'"),
+    text: z.string().describe("text to type"),
+    submit: z.boolean().optional().describe("press Enter after typing"),
+    element: z.string().optional().describe("human description (readability only)"),
+  },
+  ({ ref, text, submit }) => bmHandler(() => explore.typeRef(ref, text, submit))(),
+);
+
+server.tool(
+  "bm_press_key",
+  "Presses a key (e.g. 'Enter', 'Escape', 'ArrowDown'). If you pass `ref`, it presses it on " +
+    "that element; otherwise, on the current focus. Returns { ok, snapshot }.",
+  {
+    key: z.string().describe("key name, e.g. 'Enter'"),
+    ref: z.string().optional().describe("ref of the element to press on (optional)"),
+  },
+  ({ key, ref }) => bmHandler(async () => ({ ok: true, ...(await explore.pressKey(key, ref)) }))(),
+);
+
+server.tool(
+  "bm_wait_for",
+  "Waits (best-effort, a timeout is NOT an error) for a text to appear (`text`), disappear " +
+    "(`textGone`), or for some time to pass (`time`, in seconds). Returns { ok, snapshot }.",
+  {
+    text: z.string().optional().describe("text that should appear"),
+    textGone: z.string().optional().describe("text that should disappear"),
+    time: z.number().optional().describe("seconds to wait"),
+  },
+  ({ text, textGone, time }) =>
+    bmHandler(async () => ({ ok: true, ...(await explore.waitFor({ text, textGone, time })) }))(),
+);
+
+server.tool(
+  "bm_network",
+  "Returns the network captured by this server (continuous CDP: survives redirects) during " +
+    "exploration. For xhr/fetch it brings headers/body (secrets redacted). Useful to detect a " +
+    "direct HTTP endpoint and save an http recipe instead of UI.",
+  {},
+  bmHandler(async () => getNetLog()),
+);
+
+server.tool(
+  "bm_console",
+  "Returns the console messages captured on the explored pages (type/text/location).",
+  {},
+  bmHandler(async () => getConsoleLog()),
+);
+
+server.tool(
+  "bm_screenshot",
+  "Takes a screenshot of the active page (best-effort) and returns its path on disk.",
+  {},
+  bmHandler(async () => {
+    const path = join(paths.traces, `bm-shot-${Date.now()}.png`);
+    return { path: await explore.screenshotActive(path) };
+  }),
+);
+
+server.tool(
+  "bm_select_option",
+  "Selects option(s) in a <select> by ref. `values` are the value/label of the options. " +
+    "Returns { ok, cssSelector, snapshot }.",
+  {
+    ref: z.string().describe("ref of the <select>"),
+    values: z.array(z.string()).describe("values/labels to select"),
+  },
+  ({ ref, values }) => bmHandler(() => explore.selectOption(ref, values))(),
+);
+
+server.tool(
+  "bm_file_upload",
+  "Uploads file(s) to the <input type=file> of the given ref (works even if the input is hidden). " +
+    "`paths` are absolute paths on disk. Returns { ok, cssSelector }.",
+  {
+    ref: z.string().describe("ref of the file input"),
+    paths: z.array(z.string()).describe("absolute paths of the files to upload"),
+  },
+  ({ ref, paths: files }) => bmHandler(() => explore.fileUpload(ref, files))(),
+);
+
+server.tool(
+  "bm_handle_dialog",
+  "Configures how to handle the NEXT browser dialogs (alert/confirm/prompt). By " +
+    "default they're accepted so as not to hang; pass `accept: false` to dismiss them, and `text` to " +
+    "answer a prompt. Returns the last dialog seen.",
+  {
+    accept: z.boolean().describe("true = accept, false = dismiss"),
+    text: z.string().optional().describe("response text for a prompt()"),
+  },
+  ({ accept, text }) => bmHandler(async () => explore.handleDialog(accept, text))(),
+);
+
+server.tool(
+  "bm_tabs",
+  "Manages the exploration Chrome's tabs. action='list' lists them all (index/url/title/" +
+    "active); 'select' makes the one at `index` active; 'close' closes the one at `index`.",
+  {
+    action: z.enum(["list", "select", "close"]).describe("operation on the tabs"),
+    index: z.number().optional().describe("index of the tab (for select/close)"),
+  },
+  ({ action, index }) => bmHandler(() => explore.tabs(action, index))(),
+);
+
+server.tool(
+  "bm_navigate_back",
+  "Goes back in the active page's history and returns { url, title, snapshot }.",
+  {},
+  bmHandler(() => explore.navigateBack()),
+);
+
 async function main(): Promise<void> {
-  // CLI de configuración: si hay argumentos posicionales (`config ...`, `help`), los maneja
-  // y NO levanta el MCP server. Sin argumentos (como lo invoca el host MCP) sigue de largo.
+  // configuration CLI: if there are positional arguments (`config ...`, `help`), it handles them
+  // and does NOT launch the MCP server. Without arguments (as the MCP host invokes it) it keeps going.
   const argv = process.argv.slice(2);
   if (argv.length > 0) {
     runCli(argv);
     return;
   }
-  // tool-memory es dueño del Chrome pero NO lo levanta al arrancar: lo hace lazy,
-  // recién cuando hace falta de verdad (un run, o un discover sin resultado que va a
-  // derivar en exploración). Así conectar el MCP / mandar un "hola" no abre nada.
+  // tool-memory owns Chrome but does NOT launch it at startup: it does it lazily,
+  // only when it's really needed (a run, or a discover with no result that's going to
+  // lead to exploration). This way connecting the MCP / sending a "hello" opens nothing.
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }

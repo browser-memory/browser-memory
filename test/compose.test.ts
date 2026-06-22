@@ -9,8 +9,8 @@ process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-compose-"));
 const { saveItem } = await import("../src/memory/store.ts");
 const { discover } = await import("../src/memory/discover.ts");
 
-// Composite que encadena dos primitivas http (sin navegador) para testear el
-// mapeo out → in y el aborto por precondición.
+// Composite that chains two http primitives (no browser) to test the
+// out → in mapping and the abort on a failed precondition.
 const httpEcho = (name: string, urlTpl: string) => ({
   name,
   site: "echo.test",
@@ -23,39 +23,39 @@ const httpEcho = (name: string, urlTpl: string) => ({
   success_assertion: { type: "json", jsonPath: "x" },
 });
 
-test("discovery prioriza composites sobre primitivas", () => {
+test("discovery prioritizes composites over primitives", () => {
   saveItem(httpEcho("alpha-search", "https://x/{{x}}"));
   saveItem({
     name: "alpha-flow",
     type: "composite",
-    site: "echo.test", // discovery es por sitio: el composite debe declararlo para aparecer.
-    intent: "alpha search flujo completo",
+    site: "echo.test", // discovery is per site: the composite must declare it to show up.
+    intent: "alpha search full flow",
     keywords: ["alpha", "search"],
     params: { x: "string" },
     chain: [{ tool: "alpha-search", in: { x: "{{x}}" } }],
   });
-  // Pedimos el sitio → trae ambos; ante igualdad, el composite va primero (boost §10.2).
+  // Ask for the site → brings both; on a tie, the composite comes first (boost §10.2).
   const r = discover(["echo.test"]);
-  assert.equal(r[0].type, "composite", "el composite debe ir primero");
+  assert.equal(r[0].type, "composite", "the composite should come first");
 });
 
-test("un composite sin site hereda el de la primera tool de su cadena", () => {
+test("a composite without site inherits the one from the first tool in its chain", () => {
   saveItem(httpEcho("beta-search", "https://x/{{x}}")); // site: echo.test
   const saved = saveItem({
     name: "beta-flow",
     type: "composite",
-    // sin `site`: debe derivarse de beta-search.
-    intent: "beta flujo",
+    // no `site`: it must be derived from beta-search.
+    intent: "beta flow",
     keywords: ["beta"],
     params: { x: "string" },
     chain: [{ tool: "beta-search", in: { x: "{{x}}" } }],
   });
   assert.equal(saved.type === "composite" && saved.site, "echo.test");
-  // y por lo tanto es descubrible por sitio:
+  // and therefore it is discoverable by site:
   assert.ok(discover(["echo.test"]).some((c) => c.name === "beta-flow"));
 });
 
-test("schema composite valida la cadena", async () => {
+test("composite schema validates the chain", async () => {
   const { parseComposite } = await import("../src/schema/tool.ts");
   assert.throws(() => parseComposite({ name: "c", type: "composite", intent: "x", chain: [] }));
   const ok = parseComposite({
@@ -67,9 +67,9 @@ test("schema composite valida la cadena", async () => {
   assert.equal(ok.chain[0].out, "h");
 });
 
-test("extractHandle: objeto con la clave usa ese campo; escalar usa el valor", async () => {
-  // Probamos la lógica de mapeo de handles indirectamente vía resolveInputs no
-  // está exportada; validamos el comportamiento documentado con un objeto.
+test("extractHandle: an object with the key uses that field; a scalar uses the value", async () => {
+  // We test the handle-mapping logic indirectly since resolveInputs is not
+  // exported; we validate the documented behavior with an object.
   const composite = {
     name: "h-flow",
     type: "composite",

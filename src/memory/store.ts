@@ -20,8 +20,8 @@ import {
 import { lintTool } from "./lint.js";
 
 /**
- * Memoria en disco (spec §10): tools/<name>.json + index.json. Guarda primitivas y
- * composites en el mismo árbol. Archivos legibles y versionables, sin base de datos.
+ * On-disk memory (spec §10): tools/<name>.json + index.json. Stores primitives and
+ * composites in the same tree. Readable and versionable files, no database.
  */
 
 function ensureDirs(): void {
@@ -34,9 +34,9 @@ function itemPath(name: string): string {
 }
 
 /**
- * Normaliza un `site` a un dominio comparable: minúsculas, sin esquema (http/https),
- * sin `www.` y sin path. Ej.: "https://www.Infobae.com/x" → "infobae.com". Lo aplican
- * tanto el guardado (este módulo) como el discovery sobre el término pedido.
+ * Normalizes a `site` to a comparable domain: lowercase, without scheme (http/https),
+ * without `www.` and without path. E.g.: "https://www.Infobae.com/x" → "infobae.com". Both
+ * the save (this module) and the discovery over the requested term apply it.
  */
 export function normalizeSite(s: string): string {
   return s
@@ -48,62 +48,62 @@ export function normalizeSite(s: string): string {
 }
 
 /**
- * Guarda un item validándolo SIEMPRE antes de persistir. Dos puertas, ambas estáticas
- * (no tocan el navegador):
- *  1. esquema (parseMemoryItem) — la forma.
- *  2. lint (solo primitivas) — el cableado de params: placeholders bien formados, params
- *     usados, extractor que lee de `params`. Es la única red para tools que no se pueden
- *     smoke-runear (write-irreversible). El smoke-run de lectura vive en el handler `save`.
+ * Saves an item, ALWAYS validating it before persisting. Two gates, both static
+ * (they don't touch the browser):
+ *  1. schema (parseMemoryItem) — the shape.
+ *  2. lint (primitives only) — the param wiring: well-formed placeholders, used params,
+ *     extractor that reads from `params`. It's the only net for tools that can't be
+ *     smoke-run (write-irreversible). The read smoke-run lives in the `save` handler.
  */
 export function saveItem(raw: unknown): MemoryItem {
   ensureDirs();
   const item = parseMemoryItem(raw);
   if (isComposite(item)) {
-    // El discovery es por sitio: un composite sin `site` sería indescubrible. Si el
-    // distiller no lo puso, lo derivamos del sitio de la primera tool de su cadena
-    // (las primitivas se guardan antes que el composite).
+    // Discovery is per-site: a composite without `site` would be undiscoverable. If the
+    // distiller didn't set it, we derive it from the site of the first tool in its chain
+    // (primitives are saved before the composite).
     if (!item.site) item.site = deriveCompositeSite(item);
   } else {
     const problems = lintTool(item);
     if (problems.length) {
       throw new Error(
-        `lint rechazó '${item.name}':\n- ${problems.join("\n- ")}`,
+        `lint rejected '${item.name}':\n- ${problems.join("\n- ")}`,
       );
     }
   }
-  // Site siempre normalizado en disco (sin esquema/www/path) para que el match por
-  // dominio exacto del discovery funcione.
+  // Site always normalized on disk (without scheme/www/path) so the exact-domain
+  // match of discovery works.
   if (item.site) item.site = normalizeSite(item.site);
   writeFileSync(itemPath(item.name), JSON.stringify(item, null, 2) + "\n");
   reindex();
   return item;
 }
 
-/** Sitio de un composite = el de la primera tool de su cadena que ya esté en memoria. */
+/** Site of a composite = that of the first tool in its chain that's already in memory. */
 function deriveCompositeSite(c: Composite): string | undefined {
   for (const step of c.chain) {
     try {
       const t = loadItem(step.tool);
       if (t.site) return t.site;
     } catch {
-      // la tool referida todavía no está en memoria; probamos el próximo paso.
+      // the referenced tool isn't in memory yet; we try the next step.
     }
   }
   return undefined;
 }
 
-/** Borra un item de la memoria (usado para revertir un save que no pasó el smoke-run). */
+/** Deletes an item from memory (used to revert a save that didn't pass the smoke-run). */
 export function removeItem(name: string): void {
   const p = itemPath(name);
   if (existsSync(p)) rmSync(p);
   reindex();
 }
 
-/** Alias retro-compatible: guarda una primitiva. */
+/** Backwards-compatible alias: saves a primitive. */
 export function saveTool(raw: unknown): Tool {
   const item = saveItem(raw);
   if (isComposite(item)) {
-    throw new Error(`${item.name} es composite, usá saveItem/saveComposite`);
+    throw new Error(`${item.name} is a composite, use saveItem/saveComposite`);
   }
   return item;
 }
@@ -111,21 +111,21 @@ export function saveTool(raw: unknown): Tool {
 export function loadItem(name: string): MemoryItem {
   const p = itemPath(name);
   if (!existsSync(p)) {
-    throw new Error(`Item no encontrado en memoria: ${name}`);
+    throw new Error(`Item not found in memory: ${name}`);
   }
   return parseMemoryItem(JSON.parse(readFileSync(p, "utf8")));
 }
 
-/** Carga una primitiva; lanza si el item es un composite. */
+/** Loads a primitive; throws if the item is a composite. */
 export function loadTool(name: string): Tool {
   const item = loadItem(name);
-  if (isComposite(item)) throw new Error(`${name} es composite, no primitiva`);
+  if (isComposite(item)) throw new Error(`${name} is a composite, not a primitive`);
   return item;
 }
 
 export function loadComposite(name: string): Composite {
   const item = loadItem(name);
-  if (!isComposite(item)) throw new Error(`${name} no es composite`);
+  if (!isComposite(item)) throw new Error(`${name} is not a composite`);
   return item;
 }
 
@@ -136,7 +136,7 @@ export function listItems(): MemoryItem[] {
     .map((f) => parseMemoryItem(JSON.parse(readFileSync(join(paths.tools, f), "utf8"))));
 }
 
-/** Reconstruye index.json a partir de los items en disco. */
+/** Rebuilds index.json from the items on disk. */
 export function reindex(): IndexEntry[] {
   ensureDirs();
   const entries = listItems().map(toIndexEntry);

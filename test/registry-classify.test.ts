@@ -14,33 +14,33 @@ function res(status: number, headers?: Record<string, string>): Response {
   return new Response("", { status, headers });
 }
 
-test("401 y 403 lanzan RegistryAuthError con el status", () => {
+test("401 and 403 throw RegistryAuthError with the status", () => {
   assert.throws(() => classify(res(401)), (e) => e instanceof RegistryAuthError && e.status === 401);
   assert.throws(() => classify(res(403)), (e) => e instanceof RegistryAuthError && e.status === 403);
 });
 
-test("429 lanza RegistryRateLimitError y parsea Retry-After", () => {
+test("429 throws RegistryRateLimitError and parses Retry-After", () => {
   assert.throws(
     () => classify(res(429, { "retry-after": "42" })),
     (e) => e instanceof RegistryRateLimitError && e.retryAfterSeconds === 42,
   );
 });
 
-test("429 sin Retry-After deja retryAfterSeconds en null", () => {
+test("429 without Retry-After leaves retryAfterSeconds at null", () => {
   assert.throws(
     () => classify(res(429)),
     (e) => e instanceof RegistryRateLimitError && e.retryAfterSeconds === null,
   );
 });
 
-test("Retry-After no numérico (date) cae a null sin romper", () => {
+test("non-numeric Retry-After (date) falls back to null without breaking", () => {
   assert.throws(
     () => classify(res(429, { "retry-after": "Wed, 21 Oct 2025 07:28:00 GMT" })),
     (e) => e instanceof RegistryRateLimitError && e.retryAfterSeconds === null,
   );
 });
 
-test("200, 404 y 5xx NO lanzan (best-effort lo maneja cada función)", () => {
+test("200, 404 and 5xx do NOT throw (each function handles best-effort)", () => {
   assert.doesNotThrow(() => classify(res(200)));
   assert.doesNotThrow(() => classify(res(404)));
   assert.doesNotThrow(() => classify(res(503)));

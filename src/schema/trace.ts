@@ -1,16 +1,17 @@
 import { z } from "zod";
 
 /**
- * Esquema de la Trace (spec §10.4): el registro de un run real exitoso del que se
- * aprende un tool. La arma el propio agente con narración + network + screenshots
- * (sin interceptar ni parsear formatos internos del navegador).
+ * Trace schema (spec §10.4): the record of a real successful run from which a tool is
+ * learned. The agent itself builds it with narration + network + screenshots (without
+ * intercepting nor parsing the browser's internal formats).
  */
 
 /**
- * Un paso canónico del camino que funcionó (separado del ruido de exploración).
- * La narración es DOCUMENTACIÓN que lee el distiller, no se ejecuta — por eso el
- * schema es laxo: `action` es un label libre (navigate, click, parse, extract...) y
- * casi todo es opcional. La idea es que `learn` nunca rechace una narración razonable.
+ * A canonical step of the path that worked (separated from exploration noise).
+ * The narration is DOCUMENTATION that the distiller reads, it's not executed — that's
+ * why the schema is lax: `action` is a free label (navigate, click, parse, extract...)
+ * and almost everything is optional. The idea is that `learn` never rejects a
+ * reasonable narration.
  */
 export const NarrationStep = z.object({
   intent: z.string().optional(),
@@ -22,17 +23,17 @@ export const NarrationStep = z.object({
 export type NarrationStep = z.infer<typeof NarrationStep>;
 
 export const Narration = z.object({
-  // goal/site/success_signal: opcionales. goal se completa desde el goal de learn()
-  // si falta (no hace falta duplicarlo dentro de la narración).
+  // goal/site/success_signal: optional. goal is filled from learn()'s goal if missing
+  // (no need to duplicate it inside the narration).
   goal: z.string().optional(),
   site: z.string().optional(),
   outcome: z.enum(["ok", "fail"]).default("ok"),
   success_signal: z.string().optional(),
   auth: z.string().optional(),
   steps: z.array(NarrationStep).min(1),
-  /** Función lectora del DOM para tools de lectura (serializada como string). */
+  /** DOM reader function for read tools (serialized as a string). */
   reader_fn: z.string().optional(),
-  /** Candidato a camino HTTP directo, si network mostró un endpoint limpio. */
+  /** Candidate for a direct HTTP path, if network showed a clean endpoint. */
   api_candidate: z
     .object({
       method: z.string(),
@@ -54,13 +55,13 @@ export const TraceMeta = z.object({
 });
 export type TraceMeta = z.infer<typeof TraceMeta>;
 
-/** Payload que el agente pasa a learn() para persistir la trace. */
+/** Payload the agent passes to learn() to persist the trace. */
 export const LearnInput = z.object({
   goal: z.string(),
   narration: Narration,
-  /** Salida cruda de browser_network_requests (opcional). */
+  /** Raw output of browser_network_requests (optional). */
   network: z.unknown().optional(),
-  /** Salida de browser_console_messages (opcional). */
+  /** Output of browser_console_messages (optional). */
   console: z.unknown().optional(),
 });
 export type LearnInput = z.infer<typeof LearnInput>;

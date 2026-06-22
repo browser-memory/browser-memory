@@ -15,8 +15,8 @@ import {
 } from "../schema/trace.js";
 
 /**
- * Store de traces (spec §10.4). Persiste la narración + network + meta de un run
- * real exitoso, congelada para que el distiller la lea en background.
+ * Trace store (spec §10.4). Persists the narration + network + meta of a real
+ * successful run, frozen so the distiller can read it in the background.
  */
 
 function nextTraceId(): string {
@@ -34,10 +34,10 @@ export interface PersistedTrace {
   dir: string;
 }
 
-/** Valida y persiste una trace; devuelve su id y carpeta. */
+/** Validates and persists a trace; returns its id and folder. */
 export function persistTrace(input: LearnInput): PersistedTrace {
   const parsed: NarrationT = Narration.parse(input.narration);
-  // Completamos goal/site desde el nivel de learn() si la narración no los trae.
+  // We fill goal/site from the learn() level if the narration doesn't carry them.
   const narration: NarrationT = {
     ...parsed,
     goal: parsed.goal ?? input.goal,
@@ -76,14 +76,14 @@ export function persistTrace(input: LearnInput): PersistedTrace {
   return { id, dir };
 }
 
-/** Lee una trace ya persistida (la usa el distiller). */
+/** Reads an already-persisted trace (used by the distiller). */
 export function readTrace(id: string): {
   meta: unknown;
   narration: unknown;
   network?: unknown;
 } {
   const dir = join(paths.traces, id);
-  if (!existsSync(dir)) throw new Error(`Trace no encontrada: ${id}`);
+  if (!existsSync(dir)) throw new Error(`Trace not found: ${id}`);
   const read = (f: string) =>
     existsSync(join(dir, f))
       ? JSON.parse(readFileSync(join(dir, f), "utf8"))

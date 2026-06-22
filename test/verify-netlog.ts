@@ -1,9 +1,10 @@
 /**
- * Verificación e2e del grabador de red cross-client (no es un unit test).
+ * E2E verification of the cross-client network recorder (not a unit test).
  *
- * Simula la realidad: tool-memory escucha la red por SU conexión CDP, mientras OTRO
- * cliente CDP (como playwright-mcp) maneja las pestañas y navega/redirige. Probamos que
- * tool-memory captura igual TODOS los requests, incluso a través de un "redirect".
+ * Verifies that the recorder captures the network even when the tabs are driven by ANOTHER CDP
+ * connection (historical case: an external client). Today that role is filled by the server's
+ * own bm_* tools, but the guarantee still matters: it captures ALL requests, even across a
+ * "redirect" that would reset an in-memory list.
  *
  *   npx tsx test/verify-netlog.ts
  */
@@ -14,21 +15,21 @@ import { cdpEndpoint } from "../src/config.js";
 
 async function main(): Promise<void> {
   const { reused } = await launchSharedChrome();
-  // tool-memory arranca su grabador (atacha a su propia vista del contexto compartido).
+  // tool-memory starts its recorder (attaches to its own view of the shared context).
   await startNetLog();
 
-  // Segundo cliente CDP independiente = el rol de playwright-mcp.
+  // Second independent CDP client = the role of playwright-mcp.
   const mcp = await chromium.connectOverCDP(cdpEndpoint);
   const ctx = mcp.contexts()[0] ?? (await mcp.newContext());
   const page = await ctx.newPage();
 
-  // Navegación 1 → luego navegación 2 (esto RESETEARÍA un browser_network_requests).
+  // Navigation 1 → then navigation 2 (this WOULD RESET a browser_network_requests).
   await page.goto("https://example.com/", { waitUntil: "domcontentloaded" });
   await page.goto("https://www.iana.org/help/example-domains", {
     waitUntil: "domcontentloaded",
   });
 
-  // Damos un respiro para que los eventos de red lleguen por CDP.
+  // Give it a moment for the network events to arrive over CDP.
   await page.waitForTimeout(800);
 
   const log = getNetLog();
@@ -37,10 +38,10 @@ async function main(): Promise<void> {
   const sawSecond = urls.some((u) => u.includes("iana.org"));
 
   console.log(`Chrome reused: ${reused}`);
-  console.log(`Entradas capturadas: ${log.length}`);
-  console.log(`  example.com (pre-redirect): ${sawFirst ? "OK" : "FALTA"}`);
-  console.log(`  iana.org    (post-redirect): ${sawSecond ? "OK" : "FALTA"}`);
-  console.log("Muestra:");
+  console.log(`Captured entries: ${log.length}`);
+  console.log(`  example.com (pre-redirect): ${sawFirst ? "OK" : "MISSING"}`);
+  console.log(`  iana.org    (post-redirect): ${sawSecond ? "OK" : "MISSING"}`);
+  console.log("Sample:");
   for (const e of log.slice(0, 8)) {
     console.log(`  ${e.n} ${e.method} ${e.status ?? "-"} ${e.type} ${e.url}`);
   }
@@ -51,11 +52,11 @@ async function main(): Promise<void> {
 
   if (!sawFirst || !sawSecond) {
     console.error(
-      "\nFALLO: la captura cross-client no vio todo. El pre-redirect se perdió.",
+      "\nFAILURE: the cross-client capture did not see everything. The pre-redirect was lost.",
     );
     process.exit(1);
   }
-  console.log("\nOK: tool-memory capturó la red de otro cliente CDP, a través del redirect.");
+  console.log("\nOK: tool-memory captured another CDP client's network, across the redirect.");
   process.exit(0);
 }
 

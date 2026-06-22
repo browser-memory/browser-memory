@@ -12,7 +12,7 @@ const { readApiKey, clearApiKeyCache } = await import("../src/registry/credentia
 
 const realFetch = globalThis.fetch;
 
-/** Stub de fetch que rutea por URL: devuelve {status, body} o "throw" por endpoint. */
+/** fetch stub that routes by URL: returns {status, body} or "throw" per endpoint. */
 function routeFetch(fn: (url: string) => { status: number; body: unknown } | "throw"): void {
   globalThis.fetch = (async (input: unknown) => {
     const url = String(input);
@@ -25,7 +25,7 @@ function routeFetch(fn: (url: string) => { status: number; body: unknown } | "th
   }) as typeof fetch;
 }
 
-/** Stub simple para los tests de pollDevice (un solo endpoint). */
+/** Simple stub for the pollDevice tests (a single endpoint). */
 function stubFetch(status: number, body: unknown): void {
   routeFetch(() => (body === "throw" ? "throw" : { status, body }));
 }
@@ -37,36 +37,36 @@ test.afterEach(() => {
   if (existsSync(paths.auth)) rmSync(paths.auth);
 });
 
-// ---- pollDevice (poll único) ----
+// ---- pollDevice (single poll) ----
 
-test("poll devuelve la api_key cuando el server autoriza", async () => {
+test("poll returns the api_key when the server authorizes", async () => {
   stubFetch(200, { api_key: "bmk_authorized" });
   assert.equal(await pollDevice("dc_1"), "bmk_authorized");
 });
 
-test("poll devuelve 'pending' mientras no se autorizó", async () => {
+test("poll returns 'pending' while not yet authorized", async () => {
   stubFetch(200, { status: "pending" });
   assert.equal(await pollDevice("dc_1"), "pending");
 });
 
-test("poll devuelve null (corta el login) ante 400 expired_token", async () => {
+test("poll returns null (aborts the login) on 400 expired_token", async () => {
   stubFetch(400, { error: "expired_token" });
   assert.equal(await pollDevice("dc_1"), null);
 });
 
-test("poll trata un 5xx como 'pending' (transitorio, sigue esperando)", async () => {
+test("poll treats a 5xx as 'pending' (transient, keeps waiting)", async () => {
   stubFetch(503, { error: "boom" });
   assert.equal(await pollDevice("dc_1"), "pending");
 });
 
-test("poll trata un error de red como 'pending' (no aborta el login)", async () => {
+test("poll treats a network error as 'pending' (does not abort the login)", async () => {
   stubFetch(0, "throw");
   assert.equal(await pollDevice("dc_1"), "pending");
 });
 
-// ---- attemptDeviceLogin (no bloqueante, device-code en disco) ----
+// ---- attemptDeviceLogin (non-blocking, device-code on disk) ----
 
-test("sin pendiente: arranca device flow, devuelve link y persiste el device_code", async () => {
+test("with no pending: starts the device flow, returns a link and persists the device_code", async () => {
   routeFetch((url) =>
     url.endsWith("/device/start")
       ? {
@@ -86,10 +86,10 @@ test("sin pendiente: arranca device flow, devuelve link y persiste el device_cod
     outcome.status === "pending" ? outcome.verificationUrl : "",
     /cli-auth\?code=WDJB-MJHT/,
   );
-  assert.ok(existsSync(paths.pendingDevice), "debe persistir pending-device.json");
+  assert.ok(existsSync(paths.pendingDevice), "must persist pending-device.json");
 });
 
-test("con pendiente ya autorizado: reclama la key, la cachea y borra el pendiente", async () => {
+test("with an already-authorized pending: claims the key, caches it and deletes the pending", async () => {
   writeFileSync(
     paths.pendingDevice,
     JSON.stringify({
@@ -107,10 +107,10 @@ test("con pendiente ya autorizado: reclama la key, la cachea y borra el pendient
   const outcome = await attemptDeviceLogin();
   assert.equal(outcome.status, "authorized");
   assert.equal(readApiKey(), "bmk_from_device");
-  assert.ok(!existsSync(paths.pendingDevice), "debe borrar el pendiente tras autorizar");
+  assert.ok(!existsSync(paths.pendingDevice), "must delete the pending after authorizing");
 });
 
-test("con pendiente todavía sin autorizar: devuelve el mismo link, sin nuevo start", async () => {
+test("with a pending not yet authorized: returns the same link, with no new start", async () => {
   writeFileSync(
     paths.pendingDevice,
     JSON.stringify({
@@ -129,5 +129,5 @@ test("con pendiente todavía sin autorizar: devuelve el mismo link, sin nuevo st
   const outcome = await attemptDeviceLogin();
   assert.equal(outcome.status, "pending");
   assert.match(outcome.status === "pending" ? outcome.verificationUrl : "", /code=CC-DD/);
-  assert.equal(startCalls, 0, "no debe arrancar un device flow nuevo si hay uno vigente");
+  assert.equal(startCalls, 0, "must not start a new device flow if one is still active");
 });

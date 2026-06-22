@@ -4,9 +4,9 @@ import { cdpEndpoint } from "../config.js";
 import { launchSharedChrome } from "./chrome.js";
 
 /**
- * Driver de replay: se ATACHA al Chrome compartido vía CDP. No lanza un proceso
- * de navegador propio — comparte el de chrome.ts. El replay es liviano: solo
- * navigate/click/type/evaluate con selectores ya conocidos (no necesita snapshot).
+ * Replay driver: it ATTACHES to the shared Chrome via CDP. It does not launch its own
+ * browser process — it shares the one from chrome.ts. Replay is lightweight: just
+ * navigate/click/type/evaluate with already-known selectors (no snapshot needed).
  */
 
 let browser: Browser | undefined;
@@ -14,22 +14,22 @@ let browser: Browser | undefined;
 export interface ReplayHandle {
   browser: Browser;
   context: BrowserContext;
-  /** Una page lista para usar (la primera existente, o una nueva). */
+  /** A page ready to use (the first existing one, or a new one). */
   page: Page;
 }
 
 async function getBrowser(): Promise<Browser> {
   if (browser && browser.isConnected()) return browser;
-  // Lazy: recién acá, cuando de verdad vamos a usar el navegador, lo levantamos
-  // (idempotente: reusa si ya hay un CDP vivo). Así conectar el MCP no abre Chrome.
+  // Lazy: only here, when we actually go to use the browser, do we launch it
+  // (idempotent: reuses if there's already a live CDP). So connecting the MCP doesn't open Chrome.
   await launchSharedChrome();
   browser = await chromium.connectOverCDP(cdpEndpoint);
   return browser;
 }
 
 /**
- * Devuelve un handle de replay sobre el Chrome compartido. Reusa el contexto y la
- * primera pestaña existente para arrastrar el estado vivo (sesión, etc.).
+ * Returns a replay handle over the shared Chrome. Reuses the context and the first
+ * existing tab to carry over the live state (session, etc.).
  */
 export async function connectReplay(): Promise<ReplayHandle> {
   const b = await getBrowser();
@@ -39,9 +39,9 @@ export async function connectReplay(): Promise<ReplayHandle> {
 }
 
 /**
- * Devuelve el contexto compartido (el default del Chrome único). Lo usan el grabador
- * de red (netlog) y la captura de screenshots para observar lo que hace playwright-mcp
- * sobre las MISMAS pestañas.
+ * Returns the shared context (the default one of the dedicated Chrome). It's used by the
+ * network recorder (netlog), the screenshot capture, and the exploration tools
+ * (browser/explore.ts) to operate over the SAME tabs.
  */
 export async function getSharedContext(): Promise<BrowserContext> {
   const b = await getBrowser();
@@ -49,10 +49,10 @@ export async function getSharedContext(): Promise<BrowserContext> {
 }
 
 /**
- * Congela un screenshot del estado actual de cada pestaña abierta en `dir` (best-effort).
- * Se llama al momento de `request`: captura el estado final del flujo exitoso "por las
- * dudas" (lo que el distiller no puede reconstruir desde la narración). Nunca falla el
- * request: si algo sale mal, devuelve lo que haya podido sacar.
+ * Freezes a screenshot of the current state of each open tab into `dir` (best-effort).
+ * Called at the moment of `request`: captures the final state of the successful flow "just
+ * in case" (what the distiller can't reconstruct from the narration). It never fails the
+ * request: if something goes wrong, it returns whatever it managed to take.
  */
 export async function captureScreenshotsInto(dir: string): Promise<string[]> {
   const out: string[] = [];
@@ -67,16 +67,16 @@ export async function captureScreenshotsInto(dir: string): Promise<string[]> {
         await p.screenshot({ path: file });
         out.push(file);
       } catch {
-        /* pestaña inestable (navegando, etc.): la salteamos */
+        /* unstable tab (navigating, etc.): we skip it */
       }
     }
   } catch {
-    /* sin browser conectado: best-effort, devolvemos vacío */
+    /* no browser connected: best-effort, we return empty */
   }
   return out;
 }
 
-/** Cada run usa una pestaña fresca y la cierra al terminar (tools self-contained). */
+/** Each run uses a fresh tab and closes it when done (self-contained tools). */
 export async function withFreshPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
   const b = await getBrowser();
   const context = b.contexts()[0] ?? (await b.newContext());

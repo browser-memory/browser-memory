@@ -3,15 +3,15 @@ import { parseMemoryItem, type MemoryItem, type SideEffect } from "../schema/too
 import { normalizeSite } from "../memory/store.js";
 
 /**
- * Cliente HTTP fino sobre `fetch` nativo (mismo patrón que execute.ts:runHttp). Best-effort
- * para fallos de ENTORNO (red/timeout/5xx): devuelve el fallback vacío sin propagar — un
- * backend caído no debe romper el MCP. Pero distingue dos respuestas del gating que SÍ se
- * propagan (errores tipados), porque el usuario tiene que enterarse:
- *   401/403 → RegistryAuthError      (falta/invalida la key → disparar login device-code)
- *   429     → RegistryRateLimitError (límite alcanzado → avisar; seguir con tools locales)
+ * Thin HTTP client over native `fetch` (same pattern as execute.ts:runHttp). Best-effort
+ * for ENVIRONMENT failures (network/timeout/5xx): returns the empty fallback without
+ * propagating — a backend that is down must not break the MCP. But it distinguishes two
+ * gating responses that DO propagate (typed errors), because the user must find out:
+ *   401/403 → RegistryAuthError      (missing/invalid key → trigger device-code login)
+ *   429     → RegistryRateLimitError (limit reached → warn; continue with local tools)
  */
 
-/** La key falta, es inválida o fue revocada (HTTP 401/403). */
+/** The key is missing, invalid or was revoked (HTTP 401/403). */
 export class RegistryAuthError extends Error {
   constructor(public status: number) {
     super(`registry auth HTTP ${status}`);
@@ -19,7 +19,7 @@ export class RegistryAuthError extends Error {
   }
 }
 
-/** Se alcanzó el límite de uso (HTTP 429). `retryAfterSeconds` viene del header Retry-After. */
+/** The usage limit was reached (HTTP 429). `retryAfterSeconds` comes from the Retry-After header. */
 export class RegistryRateLimitError extends Error {
   constructor(public retryAfterSeconds: number | null) {
     super("registry rate limited (HTTP 429)");
@@ -28,9 +28,9 @@ export class RegistryRateLimitError extends Error {
 }
 
 /**
- * Traduce los códigos de gating a errores tipados (lanza). El resto (incluido 404 y otros
- * !ok) NO lo toca: lo maneja cada función como best-effort. Se llama justo después del
- * fetch, antes de leer el body.
+ * Translates the gating codes into typed errors (throws). The rest (including 404 and other
+ * !ok) it does NOT touch: each function handles it as best-effort. Called right after the
+ * fetch, before reading the body.
  */
 export function classify(res: Response): void {
   if (res.status === 401 || res.status === 403) {
@@ -43,12 +43,12 @@ export function classify(res: Response): void {
   }
 }
 
-/** ¿Es un error de gating que debe propagarse (vs best-effort)? */
+/** Is it a gating error that must propagate (vs best-effort)? */
 function isGatingError(e: unknown): boolean {
   return e instanceof RegistryAuthError || e instanceof RegistryRateLimitError;
 }
 
-/** Entrada del índice remoto: IndexEntry + los nombres de params (sin valores). */
+/** Remote index entry: IndexEntry + the param names (no values). */
 export interface RemoteIndexEntry {
   name: string;
   site: string;
@@ -74,12 +74,12 @@ function warn(msg: string): void {
   process.stderr.write(`[tool-memory] registry: ${msg}\n`);
 }
 
-/** Índice remoto de las tools de esos sitios. `[]` ante cualquier fallo. */
+/** Remote index of the tools for those sites. `[]` on any failure. */
 export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntry[]> {
   if (!registryConfig.enabled) return [];
   try {
-    // Normalizamos igual que el discovery local (sin esquema/www/path y en minúsculas)
-    // para que el match remoto sea case-insensitive: "INFOBAE" == "infobae".
+    // Normalize the same way as local discovery (no scheme/www/path and lowercased)
+    // so the remote match is case-insensitive: "INFOBAE" == "infobae".
     const normalized = sites.map(normalizeSite).filter(Boolean);
     const q = encodeURIComponent(normalized.join(","));
     const res = await fetch(url(`/v1/registry/index?sites=${q}`), {
@@ -95,18 +95,18 @@ export async function fetchRemoteIndex(sites: string[]): Promise<RemoteIndexEntr
     return body.entries ?? [];
   } catch (e) {
     if (isGatingError(e)) throw e;
-    warn(`index falló: ${(e as Error).message}`);
+    warn(`index failed: ${(e as Error).message}`);
     return [];
   }
 }
 
-/** Sitio remoto con su conteo de tools curadas. */
+/** Remote site with its count of curated tools. */
 export interface RemoteSiteEntry {
   site: string;
   count: number;
 }
 
-/** Sitios remotos que tienen al menos una tool curada. `[]` ante cualquier fallo. */
+/** Remote sites that have at least one curated tool. `[]` on any failure. */
 export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
   if (!registryConfig.enabled) return [];
   try {
@@ -123,12 +123,12 @@ export async function fetchRemoteSites(): Promise<RemoteSiteEntry[]> {
     return body.sites ?? [];
   } catch (e) {
     if (isGatingError(e)) throw e;
-    warn(`sites falló: ${(e as Error).message}`);
+    warn(`sites failed: ${(e as Error).message}`);
     return [];
   }
 }
 
-/** Baja el definition COMPLETO de una tool y lo valida. `null` ante fallo o 404. */
+/** Pulls the FULL definition of a tool and validates it. `null` on failure or 404. */
 export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> {
   if (!registryConfig.enabled) return null;
   try {
@@ -143,16 +143,16 @@ export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> 
     }
     const body = (await res.json()) as { tool?: unknown };
     if (body.tool == null) return null;
-    // No confiamos a ciegas en el server: re-validamos con el MISMO schema del cliente.
+    // We don't blindly trust the server: re-validate with the SAME client schema.
     return parseMemoryItem(body.tool);
   } catch (e) {
     if (isGatingError(e)) throw e;
-    warn(`tool '${name}' falló: ${(e as Error).message}`);
+    warn(`tool '${name}' failed: ${(e as Error).message}`);
     return null;
   }
 }
 
-/** POST de un evento de uso. Best-effort: traga todo error, nunca bloquea de verdad. */
+/** POST of a usage event. Best-effort: swallows every error, never really blocks. */
 export async function postEvent(payload: Record<string, unknown>): Promise<void> {
   if (!registryConfig.enabled) return;
   try {
@@ -163,6 +163,6 @@ export async function postEvent(payload: Record<string, unknown>): Promise<void>
       signal: AbortSignal.timeout(registryConfig.timeoutMs),
     });
   } catch {
-    // Telemetría best-effort: si no se pudo loguear, seguimos sin ruido.
+    // Best-effort telemetry: if it couldn't be logged, we continue without noise.
   }
 }

@@ -24,16 +24,16 @@ test("saveTool → loadTool round-trip", () => {
   saveTool(tool);
   const loaded = loadTool("demo-tool");
   assert.equal(loaded.name, "demo-tool");
-  assert.equal(loaded.version, 1); // default aplicado
+  assert.equal(loaded.version, 1); // default applied
   assert.equal(loaded.health.fail_count, 0);
 });
 
-test("index.json refleja el tool guardado", () => {
+test("index.json reflects the saved tool", () => {
   const idx = listIndex();
   assert.ok(idx.some((e) => e.name === "demo-tool" && e.site === "demo.com"));
 });
 
-test("saveTool rechaza un tool sin success_assertion", () => {
+test("saveTool rejects a tool without success_assertion", () => {
   const bad = { ...tool, name: "bad" } as Record<string, unknown>;
   delete bad.success_assertion;
   assert.throws(() => saveTool(bad));

@@ -2,32 +2,30 @@ import type { BrowserContext, Request, Response } from "playwright";
 import { getSharedContext } from "./connect.js";
 
 /**
- * Grabador de red sobre el Chrome compartido (vía CDP).
+ * Network recorder over the shared Chrome (via CDP).
  *
- * PROBLEMA que resuelve: `browser_network_requests` de playwright-mcp reporta una lista
- * EN MEMORIA que se RESETEA en cada navegación/redirect. Si el agente saca el snapshot
- * después de un redirect, los XHR de antes ya no están → el distiller nunca los ve.
+ * PROBLEM it solves: an IN-MEMORY network list that RESETS on every
+ * navigation/redirect leaves the agent without the XHRs from before the redirect → the
+ * distiller never sees them.
  *
- * SOLUCIÓN: tool-memory ya está atachado al MISMO Chrome por CDP. Acá escuchamos los
- * eventos de red a nivel CONTEXTO de forma continua: el stream de eventos NO se borra
- * con un redirect. El buffer acumula desde que arranca la exploración (discover vacío)
- * hasta que `request` lo congela en la trace. Así tenemos TODOS los networks, no el
- * último snapshot.
+ * SOLUTION: this server controls the dedicated Chrome over CDP. Here we listen to the
+ * network events at the CONTEXT level continuously: the event stream is NOT erased by a
+ * redirect. The buffer accumulates from when exploration starts (empty discover) until
+ * `request` freezes it into the trace. So we have ALL the networks, not the last snapshot.
  *
- * Para `xhr`/`fetch` (las llamadas a APIs: GraphQL, JSON, form-urlencoded) guardamos
- * ADEMÁS headers de request, body de request y body de response. Eso es lo que el
- * distiller necesita para reconstruir un **recipe HTTP directo** y replayarlo sin
- * navegador (más rápido y determinista). Para el resto de recursos (document, image,
- * css, font, script...) seguimos guardando solo method/url/status/tipo: sus cuerpos son
- * ruido pesado.
+ * For `xhr`/`fetch` (the API calls: GraphQL, JSON, form-urlencoded) we ALSO store request
+ * headers, request body, and response body. That's what the distiller needs to reconstruct
+ * a **direct HTTP recipe** and replay it without a browser (faster and deterministic). For
+ * the rest of the resources (document, image, css, font, script...) we keep storing only
+ * method/url/status/type: their bodies are heavy noise.
  *
- * SECRETOS: nunca se persisten. Antes de guardar, (1) los headers cuyo nombre huele a
- * credencial (cookie, authorization, *-token, *-key, *-auth...) se reemplazan por
- * "<redacted>" conservando la KEY (el distiller ve que existía sin ver el valor), y
- * (2) los bodies JSON/form se recorren redactando valores de campos sensibles
- * (password, token, secret, otp, cvv...). El resto del body —la query de búsqueda, las
- * variables de GraphQL— se conserva tal cual: no es secreto y es justo lo que hay que
- * parametrizar. La sesión sigue viviendo en el perfil de Chrome, no en la trace.
+ * SECRETS: never persisted. Before storing, (1) the headers whose name smells like a
+ * credential (cookie, authorization, *-token, *-key, *-auth...) are replaced with
+ * "<redacted>" preserving the KEY (the distiller sees it existed without seeing the value),
+ * and (2) JSON/form bodies are walked, redacting values of sensitive fields (password,
+ * token, secret, otp, cvv...). The rest of the body —the search query, the GraphQL
+ * variables— is kept as-is: it's not a secret and it's exactly what must be parameterized.
+ * The session keeps living in the Chrome profile, not in the trace.
  */
 
 export interface NetEntry {
@@ -38,27 +36,27 @@ export interface NetEntry {
   /** resourceType de playwright: xhr, fetch, document, image, stylesheet... */
   type: string;
   failed?: boolean;
-  /** Anotación opcional que aporta el agente al mergear su snapshot. */
+  /** Optional annotation the agent provides when merging its snapshot. */
   role?: string;
   source?: "cdp" | "agent" | "cdp+agent";
-  /** content-type (sin parámetros) de la response. Solo xhr/fetch. */
+  /** content-type (without parameters) of the response. Only xhr/fetch. */
   mime?: string;
-  /** Headers de request con secretos redactados. Solo xhr/fetch. */
+  /** Request headers with secrets redacted. Only xhr/fetch. */
   reqHeaders?: Record<string, string>;
-  /** Body de request (postData), capado y con secretos redactados. Solo xhr/fetch. */
+  /** Request body (postData), capped and with secrets redacted. Only xhr/fetch. */
   reqBody?: string;
-  /** Body de response (json/text/form), capado y con secretos redactados. Solo xhr/fetch. */
+  /** Response body (json/text/form), capped and with secrets redacted. Only xhr/fetch. */
   resBody?: string;
 }
 
-/** Tope de entradas para no crecer sin límite en páginas muy pesadas. */
+/** Cap on entries to avoid growing without bound on very heavy pages. */
 const CAP = 4000;
 
-/** Topes de tamaño por cuerpo (caracteres). Local y gitignored, pero no infinito. */
+/** Size caps per body (characters). Local and gitignored, but not infinite. */
 const REQ_BODY_CAP = 64_000;
 const RES_BODY_CAP = 512_000;
 
-/** Nombre de header que huele a credencial → se redacta el valor, se conserva la key. */
+/** Header name that smells like a credential → the value is redacted, the key is kept. */
 function isSecretHeader(name: string): boolean {
   const n = name.toLowerCase();
   return (
@@ -72,7 +70,7 @@ function isSecretHeader(name: string): boolean {
   );
 }
 
-/** Clave de un campo (en body JSON/form) cuyo VALOR es sensible. */
+/** Key of a field (in a JSON/form body) whose VALUE is sensitive. */
 const SECRET_KEY =
   /pass(word|wd)?|token|secret|otp|^pin$|cvv|card.?number|auth|session|api[-_]?key|credential/i;
 
@@ -84,7 +82,7 @@ export function sanitizeHeaders(h: Record<string, string>): Record<string, strin
   return out;
 }
 
-/** Redacta recursivamente valores de claves sensibles en un objeto/array JSON. */
+/** Recursively redacts values of sensitive keys in a JSON object/array. */
 function scrubJson(v: unknown): unknown {
   if (Array.isArray(v)) return v.map(scrubJson);
   if (v && typeof v === "object") {
@@ -102,8 +100,8 @@ function cap(s: string, max: number): string {
 }
 
 /**
- * Sanitiza un body antes de persistirlo: si es JSON o form-urlencoded, redacta los
- * valores de campos sensibles; si no lo puede parsear, lo deja como vino (capado).
+ * Sanitizes a body before persisting it: if it's JSON or form-urlencoded, redacts the
+ * values of sensitive fields; if it can't parse it, it leaves it as it came (capped).
  */
 export function scrubBody(body: string, mime: string): string {
   const t = body.trimStart();
@@ -111,7 +109,7 @@ export function scrubBody(body: string, mime: string): string {
     try {
       return JSON.stringify(scrubJson(JSON.parse(body)));
     } catch {
-      /* no era JSON válido */
+      /* wasn't valid JSON */
     }
   }
   if (/x-www-form-urlencoded/i.test(mime) || /^[^=&\s]+=[^=]*(&|$)/.test(t)) {
@@ -126,13 +124,13 @@ export function scrubBody(body: string, mime: string): string {
       }
       if (touched) return p.toString();
     } catch {
-      /* no era form-urlencoded */
+      /* wasn't form-urlencoded */
     }
   }
   return body;
 }
 
-/** ¿Vale la pena guardar el cuerpo de esta response? (APIs de datos, no binarios.) */
+/** Is it worth storing this response's body? (data APIs, not binaries.) */
 function capturableMime(mime: string): boolean {
   return /json|graphql|x-www-form-urlencoded|xml|text\/plain/i.test(mime);
 }
@@ -140,10 +138,10 @@ function capturableMime(mime: string): boolean {
 let buffer: NetEntry[] = [];
 let seq = 0;
 let attached = false;
-/** Correlaciona la response con su request para completar el status. */
+/** Correlates the response with its request to fill in the status. */
 const byReq = new WeakMap<Request, NetEntry>();
 
-/** Solo tráfico de red real (http/ws); descartamos data:/blob:/about:. */
+/** Only real network traffic (http/ws); we discard data:/blob:/about:. */
 function interesting(url: string): boolean {
   return (
     url.startsWith("http://") ||
@@ -153,7 +151,7 @@ function interesting(url: string): boolean {
   );
 }
 
-/** Solo las llamadas a APIs justifican guardar headers/body (no document/image/css...). */
+/** Only API calls justify storing headers/body (not document/image/css...). */
 function isApiCall(type: string): boolean {
   return type === "xhr" || type === "fetch";
 }
@@ -191,7 +189,7 @@ function attachTo(ctx: BrowserContext): void {
       const txt = await res.text();
       entry.resBody = cap(scrubBody(txt, ct), RES_BODY_CAP);
     } catch {
-      /* response sin cuerpo accesible (redirect, 204, ya descartado) */
+      /* response with no accessible body (redirect, 204, already discarded) */
     }
   });
   ctx.on("requestfailed", (req: Request) => {
@@ -201,11 +199,11 @@ function attachTo(ctx: BrowserContext): void {
 }
 
 /**
- * Asegura que el grabador esté atachado y grabando. Lo llama CADA `discover`. NO limpia
- * el buffer: acumula a lo largo de toda la tarea, así varios discover (ej. multi-sitio:
- * discover(["kayak"]) y después discover(["google"])) SUMAN en vez de pisarse. El buffer
- * se vacía recién cuando un `request` congela el episodio en una trace (ver clearNetLog).
- * Idempotente: los listeners se ponen una sola vez.
+ * Ensures the recorder is attached and recording. Called on EVERY `discover`. It does NOT
+ * clear the buffer: it accumulates across the whole task, so several discovers (e.g.
+ * multi-site: discover(["kayak"]) and then discover(["google"])) ADD UP instead of
+ * overwriting. The buffer is cleared only when a `request` freezes the episode into a trace
+ * (see clearNetLog). Idempotent: the listeners are set only once.
  */
 export async function startNetLog(): Promise<void> {
   if (attached) return;
@@ -214,20 +212,20 @@ export async function startNetLog(): Promise<void> {
     attached = true;
   } catch (e) {
     process.stderr.write(
-      `[tool-memory] no pude iniciar el grabador de red: ${(e as Error).message}\n`,
+      `[tool-memory] could not start the network recorder: ${(e as Error).message}\n`,
     );
   }
 }
 
-/** Snapshot del buffer acumulado hasta ahora. */
+/** Snapshot of the buffer accumulated so far. */
 export function getNetLog(): NetEntry[] {
   return buffer.slice();
 }
 
 /**
- * Vacía el buffer. Lo llama `request` DESPUÉS de congelar la trace: cierra el episodio de
- * aprendizaje para que la próxima tarea arranque limpia. No se llama en discover (eso
- * perdería lo acumulado de un discover anterior de la MISMA tarea).
+ * Clears the buffer. Called by `request` AFTER freezing the trace: it closes the learning
+ * episode so the next task starts clean. It's not called on discover (that would lose what
+ * was accumulated by a previous discover of the SAME task).
  */
 export function clearNetLog(): void {
   buffer = [];
@@ -238,7 +236,7 @@ function keyOf(e: { method?: string; url?: string }): string {
   return `${(e.method ?? "GET").toUpperCase()} ${e.url ?? ""}`;
 }
 
-/** El agente histórico mandaba el network como string JSON; normalizamos a array. */
+/** The legacy agent sent the network as a JSON string; we normalize to an array. */
 function normalizeAgent(raw: unknown): Array<Record<string, unknown>> {
   if (raw == null) return [];
   let v: unknown = raw;
@@ -254,10 +252,10 @@ function normalizeAgent(raw: unknown): Array<Record<string, unknown>> {
 }
 
 /**
- * Une la captura COMPLETA del server (CDP, sobrevive redirects) con el snapshot que pasó
- * el agente (que puede traer anotaciones útiles de `role`). Dedupe por method+url: la
- * captura del server es la base y las anotaciones del agente se preservan. Devuelve un
- * array JSON limpio (de paso arregla el doble-encoding de cuando el agente mandaba string).
+ * Joins the server's COMPLETE capture (CDP, survives redirects) with the snapshot the agent
+ * passed (which may bring useful `role` annotations). Dedup by method+url: the server's
+ * capture is the base and the agent's annotations are preserved. Returns a clean JSON array
+ * (and along the way fixes the double-encoding from when the agent sent a string).
  */
 export function mergeNetwork(captured: NetEntry[], agentRaw: unknown): NetEntry[] {
   const byKey = new Map<string, NetEntry>();

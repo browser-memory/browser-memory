@@ -3,38 +3,38 @@ import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 /**
- * Config PERSISTIDA del usuario en ~/.tool-memory/config.json. Es la capa del medio entre
- * los defaults hardcodeados y las env vars:
+ * The user's PERSISTED config in ~/.tool-memory/config.json. It's the middle layer between
+ * the hardcoded defaults and the env vars:
  *
  *     env var   >   config.json   >   default
  *
- * La escribe el CLI (`browser-memory config set ...`); la leen config.ts y
- * registry/config.ts vía `cfg()`. Mismo patrón best-effort que credentials.ts
- * (lazy + cache + si el FS es read-only se sigue sin romper).
+ * The CLI writes it (`browser-memory config set ...`); config.ts and
+ * registry/config.ts read it via `cfg()`. Same best-effort pattern as credentials.ts
+ * (lazy + cache + if the FS is read-only it keeps going without breaking).
  *
- * OJO ciclo: este módulo NO importa config.ts. El config.json queda ANCLADO a la home por
- * env-o-default (NO al setting `home`): así, setear `home` reubica el dir de DATOS
- * (tools/traces/perfil, ver config.ts) sin mover el propio config.json — no hay bootstrap
- * circular. Si querés mover también el config.json, usá la env var TOOL_MEMORY_HOME.
+ * CYCLE WARNING: this module does NOT import config.ts. The config.json is ANCHORED to the home by
+ * env-or-default (NOT to the `home` setting): this way, setting `home` relocates the DATA dir
+ * (tools/traces/profile, see config.ts) without moving the config.json itself — there's no circular
+ * bootstrap. If you want to move the config.json too, use the env var TOOL_MEMORY_HOME.
  */
 
 const ROOT = process.env.TOOL_MEMORY_HOME ?? join(homedir(), ".tool-memory");
 export const configPath = join(ROOT, "config.json");
 
 export interface SettingDef {
-  /** Clave amigable del CLI (kebab-case), la que escribe el usuario. */
+  /** Friendly CLI key (kebab-case), the one the user types. */
   key: string;
-  /** Env var equivalente: override de mayor prioridad y nombre histórico. */
+  /** Equivalent env var: highest-priority override and historical name. */
   env: string;
   describe: string;
-  /** Texto del default para `config show` (no siempre es un valor literal). */
+  /** Text of the default for `config show` (not always a literal value). */
   defaultDesc: string;
-  /** Devuelve un mensaje de error, o null si el valor es válido. */
+  /** Returns an error message, or null if the value is valid. */
   validate?: (v: string) => string | null;
   /**
-   * Configurable desde el CLI (`config set ...`/`show`). Las demás claves SIGUEN
-   * funcionando por env var o editando config.json a mano, pero el CLI no las expone:
-   * mantenemos la superficie chica a propósito (solo prender/apagar el server y la URL).
+   * Configurable from the CLI (`config set ...`/`show`). The other keys STILL
+   * work via env var or by hand-editing config.json, but the CLI does not expose them:
+   * we keep the surface small on purpose (only turning the server on/off and the URL).
    */
   cli?: boolean;
 }
@@ -43,29 +43,29 @@ const BOOLS = ["1", "0", "true", "false", "yes", "no", "on", "off"];
 function boolish(v: string): string | null {
   return BOOLS.includes(v.toLowerCase())
     ? null
-    : `valor booleano inválido: "${v}" (usá on/off, true/false, 1/0)`;
+    : `invalid boolean value: "${v}" (use on/off, true/false, 1/0)`;
 }
 function posInt(v: string): string | null {
-  return /^\d+$/.test(v) && Number(v) > 0 ? null : `se esperaba un entero positivo, no "${v}"`;
+  return /^\d+$/.test(v) && Number(v) > 0 ? null : `expected a positive integer, not "${v}"`;
 }
 function httpUrl(v: string): string | null {
   try {
     const u = new URL(v);
-    return u.protocol === "http:" || u.protocol === "https:" ? null : "la URL debe ser http(s)";
+    return u.protocol === "http:" || u.protocol === "https:" ? null : "URL must be http(s)";
   } catch {
-    return `URL inválida: "${v}"`;
+    return `invalid URL: "${v}"`;
   }
 }
 function nonEmpty(v: string): string | null {
-  return v.trim() ? null : "el valor no puede estar vacío";
+  return v.trim() ? null : "the value cannot be empty";
 }
 
-/** Catálogo único de settings configurables. Es la fuente de verdad del CLI y de `cfg()`. */
+/** Single catalog of configurable settings. It's the source of truth for the CLI and for `cfg()`. */
 export const SETTINGS: SettingDef[] = [
   {
     key: "registry-url",
     env: "TOOL_MEMORY_REGISTRY_URL",
-    describe: "URL del registry remoto (server) del que se bajan tools",
+    describe: "URL of the remote registry (server) from which tools are pulled",
     defaultDesc: "https://api.browser-memory.com",
     validate: httpUrl,
     cli: true,
@@ -73,7 +73,7 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "registry-enabled",
     env: "TOOL_MEMORY_REGISTRY_ENABLED",
-    describe: "Prender/apagar el registry remoto (default on; off = memoria 100% local)",
+    describe: "Turn the remote registry on/off (default on; off = 100% local memory)",
     defaultDesc: "on",
     validate: boolish,
     cli: true,
@@ -81,49 +81,49 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "registry-timeout-ms",
     env: "TOOL_MEMORY_REGISTRY_TIMEOUT_MS",
-    describe: "Timeout de cada request al registry remoto (ms)",
+    describe: "Timeout of each request to the remote registry (ms)",
     defaultDesc: "3000",
     validate: posInt,
   },
   {
     key: "cdp-port",
     env: "TOOL_MEMORY_CDP_PORT",
-    describe: "Puerto remote-debugging del Chrome compartido (matchear con @playwright/mcp)",
+    describe: "Internal remote-debugging port of the dedicated Chrome this server controls",
     defaultDesc: "9333",
     validate: posInt,
   },
   {
     key: "chrome-bin",
     env: "TOOL_MEMORY_CHROME_BIN",
-    describe: "Binario de Chrome a lanzar",
-    defaultDesc: "Chrome del sistema, o el Chromium de Playwright",
+    describe: "Chrome binary to launch",
+    defaultDesc: "system Chrome, or Playwright's Chromium",
     validate: nonEmpty,
   },
   {
     key: "reseed",
     env: "TOOL_MEMORY_RESEED",
-    describe: "Refrescar sesión/login desde tu Chrome real en cada launch",
+    describe: "Refresh session/login from your real Chrome on every launch",
     defaultDesc: "on",
     validate: boolish,
   },
   {
     key: "profile",
     env: "TOOL_MEMORY_PROFILE",
-    describe: 'Perfil de Chrome a sembrar (ej. "Default", "Profile 2")',
-    defaultDesc: "el más usado (auto)",
+    describe: 'Chrome profile to seed (e.g. "Default", "Profile 2")',
+    defaultDesc: "the most used (auto)",
     validate: nonEmpty,
   },
   {
     key: "seed-from",
     env: "TOOL_MEMORY_SEED_FROM",
-    describe: "user-data-dir real de Chrome del que copiar sesiones",
-    defaultDesc: "auto por plataforma",
+    describe: "real Chrome user-data-dir to copy sessions from",
+    defaultDesc: "auto by platform",
     validate: nonEmpty,
   },
   {
     key: "home",
     env: "TOOL_MEMORY_HOME",
-    describe: "Dir donde viven tus tools, índice, traces y el perfil de Chrome",
+    describe: "Dir where your tools, index, traces and Chrome profile live",
     defaultDesc: "~/.tool-memory",
     validate: nonEmpty,
     cli: true,
@@ -140,7 +140,7 @@ export function findByKey(key: string): SettingDef | undefined {
 type FileShape = Record<string, string>;
 let cache: FileShape | null = null;
 
-/** Lee config.json (cacheado). `{}` si no existe o está corrupto. */
+/** Reads config.json (cached). `{}` if it doesn't exist or is corrupt. */
 export function loadConfigFile(): FileShape {
   if (cache) return cache;
   try {
@@ -152,7 +152,7 @@ export function loadConfigFile(): FileShape {
       }
     }
   } catch {
-    // Archivo corrupto/ilegible: lo tratamos como vacío.
+    // Corrupt/unreadable file: we treat it as empty.
   }
   cache = {};
   return cache;
@@ -164,15 +164,15 @@ function persist(obj: FileShape): void {
   writeFileSync(configPath, JSON.stringify(obj, null, 2) + "\n");
 }
 
-/** Solo para tests: olvida la cache en memoria (no toca el archivo). */
+/** Tests only: forgets the in-memory cache (does not touch the file). */
 export function clearConfigCache(): void {
   cache = null;
 }
 
 /**
- * Resuelve un valor por su nombre de env var, con precedencia env → config.json → undefined
- * (el caller aplica su propio default). Lo usan config.ts y registry/config.ts en vez de
- * leer process.env directo.
+ * Resolves a value by its env var name, with precedence env → config.json → undefined
+ * (the caller applies its own default). config.ts and registry/config.ts use it instead of
+ * reading process.env directly.
  */
 export function cfg(env: string): string | undefined {
   const fromEnv = process.env[env];
@@ -183,31 +183,31 @@ export function cfg(env: string): string | undefined {
   return v != null && v !== "" ? v : undefined;
 }
 
-/** Interpreta un valor booleanoide ("0"/"false"/"no"/"off" => false). `dflt` si no hay valor. */
+/** Interprets a boolean-ish value ("0"/"false"/"no"/"off" => false). `dflt` if there's no value. */
 export function truthy(v: string | undefined, dflt: boolean): boolean {
   if (v == null || v === "") return dflt;
   return !["0", "false", "no", "off"].includes(v.toLowerCase());
 }
 
-/** Escribe una clave al archivo. Lanza con mensaje claro si es desconocida, env-only o inválida. */
+/** Writes a key to the file. Throws with a clear message if unknown, env-only or invalid. */
 export function setSetting(key: string, value: string): void {
   const def = BY_KEY.get(key);
-  if (!def) throw new Error(`config desconocida: "${key}" (mirá \`browser-memory config show\`)`);
+  if (!def) throw new Error(`unknown config: "${key}" (see \`browser-memory config show\`)`);
   const err = def.validate?.(value);
   if (err) throw new Error(err);
   const file = { ...loadConfigFile(), [key]: value };
   persist(file);
 }
 
-/** Borra una clave del archivo (vuelve al default). Lanza si la clave es desconocida. */
+/** Deletes a key from the file (reverts to default). Throws if the key is unknown. */
 export function unsetSetting(key: string): void {
-  if (!BY_KEY.has(key)) throw new Error(`config desconocida: "${key}"`);
+  if (!BY_KEY.has(key)) throw new Error(`unknown config: "${key}"`);
   const file = { ...loadConfigFile() };
   delete file[key];
   persist(file);
 }
 
-/** Vacía el archivo entero (vuelve todo a default). */
+/** Clears the entire file (reverts everything to default). */
 export function resetConfig(): void {
   persist({});
 }
@@ -216,12 +216,12 @@ export interface EffectiveEntry {
   key: string;
   env: string;
   describe: string;
-  /** Valor efectivo, o el texto del default si no hay override. */
+  /** Effective value, or the text of the default if there's no override. */
   value: string;
   source: "env" | "config" | "default";
 }
 
-/** Vista resuelta de toda la config, con de dónde sale cada valor. Para `config show`. */
+/** Resolved view of the whole config, with where each value comes from. For `config show`. */
 export function effectiveConfig(): EffectiveEntry[] {
   const file = loadConfigFile();
   return SETTINGS.map((def) => {

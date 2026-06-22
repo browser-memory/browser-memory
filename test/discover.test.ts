@@ -4,7 +4,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Aislamos la memoria a un dir temporal ANTES de importar los módulos que leen config.
+// Isolate the memory to a temp dir BEFORE importing the modules that read config.
 process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-discover-"));
 
 const { saveTool } = await import("../src/memory/store.ts");
@@ -14,7 +14,7 @@ const { discover, matchRemoteSites, listSites, mergeSites, forgetSite } =
 const wikiTool = {
   name: "wikipedia-search",
   site: "es.wikipedia.org",
-  intent: "buscar articulos en wikipedia por texto",
+  intent: "search wikipedia articles by text",
   keywords: ["wikipedia", "buscar", "search", "wiki"],
   type: "primitive",
   side_effect: "read",
@@ -28,13 +28,13 @@ const wikiTool = {
 
 saveTool(wikiTool);
 
-test("discovery matchea el sitio por marca", () => {
+test("discovery matches the site by brand", () => {
   const r = discover(["wikipedia"]);
   assert.equal(r[0]?.name, "wikipedia-search");
   assert.equal(r[0].site, "es.wikipedia.org");
 });
 
-test("discovery matchea el sitio por dominio completo", () => {
+test("discovery matches the site by full domain", () => {
   const r = discover(["es.wikipedia.org"]);
   assert.equal(r[0]?.name, "wikipedia-search");
   assert.equal(r[0].side_effect, "read");
@@ -43,7 +43,7 @@ test("discovery matchea el sitio por dominio completo", () => {
 const xTool = {
   name: "x-post",
   site: "x.com",
-  intent: "postear un tweet en x",
+  intent: "post a tweet on x",
   keywords: ["x", "twitter", "tweet", "postear"],
   type: "primitive",
   side_effect: "write-irreversible",
@@ -57,31 +57,31 @@ const xTool = {
 
 saveTool(xTool);
 
-test("matchea un dominio de una sola letra (x.com) por marca, dominio o www", () => {
+test("matches a single-letter domain (x.com) by brand, domain or www", () => {
   for (const term of ["x", "x.com", "www.x.com", "https://x.com/home"]) {
     const r = discover([term]);
     assert.ok(
       r.some((c) => c.name === "x-post"),
-      `esperaba matchear x-post con "${term}"`,
+      `expected to match x-post with "${term}"`,
     );
   }
 });
 
-test("un sitio desconocido no matchea", () => {
+test("an unknown site does not match", () => {
   const r = discover(["aerolineas-argentinas"]);
   assert.equal(r.length, 0);
 });
 
-test("lista vacía devuelve vacío", () => {
+test("an empty list returns empty", () => {
   assert.equal(discover([]).length, 0);
 });
 
-// --- Trae TODAS las tools del/los sitio(s) pedido(s) -----------------------------
+// --- Brings ALL tools for the requested site(s) ----------------------------------
 
 const infobaePortada = {
   name: "infobae-portada",
   site: "infobae.com",
-  intent: "leer las primeras noticias de la portada",
+  intent: "read the first news on the front page",
   keywords: ["noticias", "portada", "primeras", "diario"],
   type: "primitive",
   side_effect: "read",
@@ -93,11 +93,11 @@ const infobaePortada = {
   success_assertion: { type: "dom", expr: "article" },
 };
 
-// Login del MISMO sitio: casi sin overlap textual con el goal de "noticias".
+// Login for the SAME site: almost no textual overlap with the "noticias" goal.
 const infobaeLogin = {
   name: "infobae-login",
   site: "infobae.com",
-  intent: "iniciar sesion",
+  intent: "log in",
   keywords: ["login", "ingresar", "sesion"],
   type: "primitive",
   side_effect: "write-reversible",
@@ -116,66 +116,66 @@ const infobaeLogin = {
 saveTool(infobaePortada);
 saveTool(infobaeLogin);
 
-test("pedir el sitio trae TODAS sus tools, incluida la de login", () => {
+test("asking for the site brings ALL its tools, including the login one", () => {
   const r = discover(["infobae"]);
   const names = r.map((c) => c.name);
-  assert.ok(names.includes("infobae-portada"), "falta la portada");
-  assert.ok(names.includes("infobae-login"), "falta el login del sitio");
+  assert.ok(names.includes("infobae-portada"), "missing the front page");
+  assert.ok(names.includes("infobae-login"), "missing the site login");
 });
 
-test("NO cuela tools de otro sitio", () => {
+test("does NOT leak tools from another site", () => {
   const r = discover(["infobae"]);
-  assert.ok(r.every((c) => c.site === "infobae.com"), `coló otro sitio: ${JSON.stringify(r.map((c) => c.site))}`);
+  assert.ok(r.every((c) => c.site === "infobae.com"), `leaked another site: ${JSON.stringify(r.map((c) => c.site))}`);
 });
 
-test("pedir varios sitios trae tools de todos", () => {
+test("asking for several sites brings tools from all of them", () => {
   const r = discover(["infobae", "wikipedia"]);
   const sites = new Set(r.map((c) => c.site));
-  assert.ok(sites.has("infobae.com"), "faltan tools de infobae");
-  assert.ok(sites.has("es.wikipedia.org"), "faltan tools de wikipedia");
+  assert.ok(sites.has("infobae.com"), "missing infobae tools");
+  assert.ok(sites.has("es.wikipedia.org"), "missing wikipedia tools");
 });
 
-test("dominio y marca devuelven lo mismo, sin campo score", () => {
+test("domain and brand return the same, with no score field", () => {
   const porDominio = discover(["infobae.com"]);
   const porMarca = discover(["infobae"]);
   assert.deepEqual(
     porDominio.map((c) => c.name).sort(),
     porMarca.map((c) => c.name).sort(),
   );
-  assert.ok(porMarca.every((c) => !("score" in c)), "no debería venir score");
+  assert.ok(porMarca.every((c) => !("score" in c)), "score should not be present");
 });
 
-test("el match por sitio es case-insensitive: INFOBAE == infobae", () => {
+test("the site match is case-insensitive: INFOBAE == infobae", () => {
   const enMayus = discover(["INFOBAE"]);
   const enMinus = discover(["infobae"]);
   assert.deepEqual(
     enMayus.map((c) => c.name).sort(),
     enMinus.map((c) => c.name).sort(),
-    "MAYÚSCULAS y minúsculas deberían traer las mismas tools",
+    "uppercase and lowercase should bring the same tools",
   );
-  assert.ok(enMayus.length > 0, "INFOBAE debería matchear");
+  assert.ok(enMayus.length > 0, "INFOBAE should match");
 });
 
-// --- matchRemoteSites: traduce el término pedido a sitios remotos exactos --------
+// --- matchRemoteSites: translates the requested term into exact remote sites -----
 
-test("matchRemoteSites resuelve token, dominio y www al sitio remoto (x → x.com)", () => {
+test("matchRemoteSites resolves token, domain and www to the remote site (x → x.com)", () => {
   const remotos = ["x.com", "linkedin.com", "reddit.com"];
   for (const term of ["x", "x.com", "www.x.com", "X", "https://x.com/home"]) {
     assert.deepEqual(
       matchRemoteSites([term], remotos),
       ["x.com"],
-      `esperaba que "${term}" resolviera a x.com`,
+      `expected "${term}" to resolve to x.com`,
     );
   }
 });
 
-test("matchRemoteSites devuelve [] si ningún sitio remoto matchea", () => {
+test("matchRemoteSites returns [] if no remote site matches", () => {
   assert.deepEqual(matchRemoteSites(["airbnb"], ["x.com", "linkedin.com"]), []);
   assert.deepEqual(matchRemoteSites([], ["x.com"]), []);
   assert.deepEqual(matchRemoteSites(["x"], []), []);
 });
 
-test("matchRemoteSites dedup y normaliza los candidatos remotos", () => {
+test("matchRemoteSites dedups and normalizes the remote candidates", () => {
   const out = matchRemoteSites(
     ["wikipedia"],
     ["es.wikipedia.org", "https://es.Wikipedia.org/", "en.wikipedia.org"],
@@ -183,59 +183,59 @@ test("matchRemoteSites dedup y normaliza los candidatos remotos", () => {
   assert.deepEqual(out.sort(), ["en.wikipedia.org", "es.wikipedia.org"]);
 });
 
-// --- listSites: agrega la memoria local por sitio -------------------------------
+// --- listSites: aggregates the local memory by site -----------------------------
 
-test("listSites agrupa por sitio con el conteo de tools", () => {
+test("listSites groups by site with the tool count", () => {
   const sites = listSites();
   const infobae = sites.find((s) => s.site === "infobae.com");
   const wiki = sites.find((s) => s.site === "es.wikipedia.org");
-  assert.equal(infobae?.count, 2, "infobae tiene portada + login");
-  assert.equal(wiki?.count, 1, "wikipedia tiene una sola tool");
+  assert.equal(infobae?.count, 2, "infobae has front page + login");
+  assert.equal(wiki?.count, 1, "wikipedia has a single tool");
 });
 
-// --- mergeSites: combina local + remoto deduplicando por sitio ------------------
+// --- mergeSites: combines local + remote, deduping by site ----------------------
 
-test("mergeSites marca source y no pisa conteos entre fuentes", () => {
+test("mergeSites marks source and does not clobber counts across sources", () => {
   const merged = mergeSites(
     [
       { site: "infobae.com", count: 2 },
       { site: "wikipedia.org", count: 1 },
     ],
     [
-      { site: "https://www.Infobae.com/", count: 5 }, // mismo sitio, sin normalizar
+      { site: "https://www.Infobae.com/", count: 5 }, // same site, not normalized
       { site: "airbnb.com", count: 3 },
     ],
   );
 
   const infobae = merged.find((s) => s.site === "infobae.com");
-  assert.equal(infobae?.source, "both", "infobae está en local y remoto");
+  assert.equal(infobae?.source, "both", "infobae is in local and remote");
   assert.deepEqual(infobae?.tools, { local: 2, remote: 5 });
 
   assert.equal(merged.find((s) => s.site === "wikipedia.org")?.source, "local");
   assert.equal(merged.find((s) => s.site === "airbnb.com")?.source, "remote");
 
-  // Ordenado alfabético.
+  // Alphabetically ordered.
   assert.deepEqual(
     merged.map((s) => s.site),
     ["airbnb.com", "infobae.com", "wikipedia.org"],
   );
 });
 
-// --- forgetSite: borra todas las tools locales de un sitio (al final: es destructivo) ---
+// --- forgetSite: deletes all local tools of a site (last: it is destructive) ----
 
-test("forgetSite borra TODAS las tools del sitio y no toca otros", () => {
-  // Pre: infobae tiene 2 (portada + login), wikipedia tiene 1.
+test("forgetSite deletes ALL tools of the site and does not touch others", () => {
+  // Pre: infobae has 2 (front page + login), wikipedia has 1.
   const res = forgetSite("infobae");
-  assert.equal(res.site, "infobae"); // eco normalizado del término pedido, no del dominio matcheado
+  assert.equal(res.site, "infobae"); // normalized echo of the requested term, not of the matched domain
   assert.deepEqual(res.deleted.sort(), ["infobae-login", "infobae-portada"]);
 
-  // Infobae desaparece; wikipedia sigue intacta.
+  // Infobae disappears; wikipedia stays intact.
   assert.equal(discover(["infobae"]).length, 0);
   assert.equal(discover(["wikipedia"]).length, 1);
   assert.ok(!listSites().some((s) => s.site === "infobae.com"));
 });
 
-test("forgetSite de un sitio inexistente no borra nada", () => {
-  const res = forgetSite("sitio-que-no-existe");
+test("forgetSite of a nonexistent site deletes nothing", () => {
+  const res = forgetSite("nonexistent-site");
   assert.deepEqual(res.deleted, []);
 });

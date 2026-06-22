@@ -1,10 +1,10 @@
 /**
- * Smoke test end-to-end (E0-2). Sin MCP host: ejercita el loop discover → run
- * directo sobre las funciones del server, lanzando el Chrome compartido.
+ * End-to-end smoke test (E0-2). No MCP host: exercises the discover → run loop
+ * directly over the server's functions, launching the shared Chrome.
  *
  *   npm run smoke
  *
- * Para no tocar tu memoria real, corre con TOOL_MEMORY_HOME a un dir temporal.
+ * To avoid touching your real memory, run with TOOL_MEMORY_HOME pointing at a temp dir.
  */
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -26,46 +26,46 @@ function log(...a: unknown[]) {
 }
 
 async function main() {
-  log("== E0: lanzar Chrome compartido ==");
+  log("== E0: launch the shared Chrome ==");
   const chrome = await launchSharedChrome();
-  log(`   Chrome ${chrome.reused ? "reusado" : "lanzado"} → ${chrome.cdpEndpoint}`);
+  log(`   Chrome ${chrome.reused ? "reused" : "launched"} → ${chrome.cdpEndpoint}`);
 
-  log("== E1: guardar tool de ejemplo + discovery ==");
+  log("== E1: save an example tool + discovery ==");
   saveTool(exampleJson);
   const candidates = discover(["wikipedia"]);
   log("   discover →", JSON.stringify(candidates, null, 2));
   if (candidates[0]?.name !== "wikipedia-search") {
-    throw new Error("discovery no encontró wikipedia-search en el top");
+    throw new Error("discovery did not find wikipedia-search at the top");
   }
 
-  log("== E2: run() devuelve datos ==");
-  const res = await run("wikipedia-search", { q: "gatos" });
+  log("== E2: run() returns data ==");
+  const res = await run("wikipedia-search", { q: "cats" });
   log("   run →", JSON.stringify(res, null, 2).slice(0, 600));
   if (!res.ok || !Array.isArray(res.result) || res.result.length === 0) {
-    throw new Error("run no devolvió resultados");
+    throw new Error("run did not return results");
   }
-  log(`   ✓ ${res.result.length} resultados`);
+  log(`   ✓ ${res.result.length} results`);
 
-  log("== E2: modo de falla tool-roto (selector roto a propósito) ==");
+  log("== E2: tool-broken failure mode (broken selector on purpose) ==");
   const broken = {
     ...exampleJson,
     name: "wikipedia-search-broken",
-    success_assertion: { type: "dom", expr: "#selector-que-no-existe-jamas" },
+    success_assertion: { type: "dom", expr: "#selector-that-never-exists" },
   };
   saveTool(broken);
-  const failRes = await run("wikipedia-search-broken", { q: "gatos" });
+  const failRes = await run("wikipedia-search-broken", { q: "cats" });
   log("   run(broken) →", JSON.stringify(failRes));
-  if (failRes.ok || failRes.error?.mode !== "tool-roto") {
-    throw new Error(`esperaba tool-roto, obtuve ${JSON.stringify(failRes.error)}`);
+  if (failRes.ok || failRes.error?.mode !== "tool-broken") {
+    throw new Error(`expected tool-broken, got ${JSON.stringify(failRes.error)}`);
   }
-  log("   ✓ falla tipada como tool-roto");
+  log("   ✓ failure typed as tool-broken");
 
   log("\n✅ SMOKE OK");
 }
 
 main()
   .catch((e) => {
-    console.error("\n❌ SMOKE FALLÓ:", e);
+    console.error("\n❌ SMOKE FAILED:", e);
     process.exitCode = 1;
   })
   .finally(async () => {

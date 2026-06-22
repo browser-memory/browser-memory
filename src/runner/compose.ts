@@ -5,12 +5,12 @@ import { isComposite } from "../schema/tool.js";
 import type { ChainStep, Composite } from "../schema/tool.js";
 
 /**
- * Runner de composites (spec §10.2 / §4): corre cada tool de la cadena en orden,
- * mapea out → in (el pegamento es un handle, dato estable), y ABORTA la cadena si
- * una precondición de entrada falla, reportando en qué paso. Cada tool es
- * self-contained: re-establece su contexto navegando al handle que recibe.
+ * Composite runner (spec §10.2 / §4): runs each tool in the chain in order,
+ * maps out → in (the glue is a handle, stable data), and ABORTS the chain if an
+ * input precondition fails, reporting at which step. Each tool is self-contained:
+ * it re-establishes its context by navigating to the handle it receives.
  *
- * (E4 = composición. La auto-reparación / re-learn queda fuera de alcance.)
+ * (E4 = composition. Self-repair / re-learn is out of scope.)
  */
 
 export interface ComposeStepResult {
@@ -23,16 +23,16 @@ export interface ComposeStepResult {
 export interface ComposeResult {
   ok: boolean;
   steps: ComposeStepResult[];
-  /** handles acumulados al final (params + outs). */
+  /** handles accumulated at the end (params + outs). */
   handles: Record<string, unknown>;
-  /** paso donde abortó, si abortó. */
+  /** step where it aborted, if it aborted. */
   aborted_at?: { index: number; tool: string };
 }
 
 /**
- * Extrae el valor del handle `out` desde el resultado de un tool. Si el resultado
- * es un objeto con una clave igual al nombre del handle, usa ese campo; si no, usa
- * el resultado entero (handle escalar, ej. una URL).
+ * Extracts the value of the `out` handle from a tool's result. If the result is an
+ * object with a key equal to the handle's name, it uses that field; otherwise it uses
+ * the whole result (scalar handle, e.g. a URL).
  */
 function extractHandle(result: unknown, outName: string): unknown {
   if (result && typeof result === "object" && !Array.isArray(result)) {
@@ -42,7 +42,7 @@ function extractHandle(result: unknown, outName: string): unknown {
   return result;
 }
 
-/** Resuelve los inputs de un paso desde los handles disponibles (params + outs). */
+/** Resolves a step's inputs from the available handles (params + outs). */
 function resolveInputs(
   stepIn: ChainStep["in"],
   handles: Record<string, unknown>,
@@ -61,7 +61,7 @@ export async function runComposite(
   const handles: Record<string, unknown> = { ...params };
   const steps: ComposeStepResult[] = [];
 
-  // Resolución unificada (Opción A): un composite también puede vivir en el server.
+  // Unified resolution (Option A): a composite can also live on the server.
   let composite: Composite;
   try {
     const resolved = await resolveItem(name);
@@ -69,7 +69,7 @@ export async function runComposite(
       return {
         ok: false,
         steps: [
-          { tool: name, ok: false, error: { mode: "no-aplica", message: `${name} no es composite` } },
+          { tool: name, ok: false, error: { mode: "not-applicable", message: `${name} is not a composite` } },
         ],
         handles,
       };
@@ -78,7 +78,7 @@ export async function runComposite(
   } catch (e) {
     return {
       ok: false,
-      steps: [{ tool: name, ok: false, error: { mode: "no-aplica", message: (e as Error).message } }],
+      steps: [{ tool: name, ok: false, error: { mode: "not-applicable", message: (e as Error).message } }],
       handles,
     };
   }
@@ -90,17 +90,17 @@ export async function runComposite(
     try {
       inputs = resolveInputs(link.in, handles);
     } catch (e) {
-      // Falta un handle que un paso anterior debió producir → abortamos.
+      // A handle that an earlier step should have produced is missing → we abort.
       steps.push({
         tool: link.tool,
         ok: false,
-        error: { mode: "no-aplica", message: (e as Error).message },
+        error: { mode: "not-applicable", message: (e as Error).message },
       });
       return { ok: false, steps, handles, aborted_at: { index: i, tool: link.tool } };
     }
 
     const res = await run(link.tool, inputs);
-    // Un evento por paso de la cadena (granularidad pedida): mide qué primitiva falla.
+    // One event per chain step (requested granularity): measures which primitive fails.
     logEvent({
       event_type: "tool_step",
       tool_name: link.tool,
@@ -112,7 +112,7 @@ export async function runComposite(
       param_keys: Object.keys(inputs),
     });
     if (!res.ok) {
-      // Precondición o ejecución falló: abortamos la cadena reportando dónde.
+      // Precondition or execution failed: we abort the chain reporting where.
       steps.push({ tool: link.tool, ok: false, error: res.error });
       return { ok: false, steps, handles, aborted_at: { index: i, tool: link.tool } };
     }

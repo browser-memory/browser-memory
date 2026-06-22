@@ -25,7 +25,7 @@ function fresh(): void {
   delete process.env.TOOL_MEMORY_RESEED;
 }
 
-test("set persiste al archivo y cfg lo lee", () => {
+test("set persists to the file and cfg reads it", () => {
   fresh();
   setSetting("registry-url", "https://mi-registry.com");
   clearConfigCache();
@@ -35,7 +35,7 @@ test("set persiste al archivo y cfg lo lee", () => {
   assert.equal(raw["registry-url"], "https://mi-registry.com");
 });
 
-test("precedencia: env var gana sobre config.json", () => {
+test("precedence: env var wins over config.json", () => {
   fresh();
   setSetting("registry-url", "https://file.com");
   process.env.TOOL_MEMORY_REGISTRY_URL = "https://env.com";
@@ -43,7 +43,7 @@ test("precedencia: env var gana sobre config.json", () => {
   delete process.env.TOOL_MEMORY_REGISTRY_URL;
 });
 
-test("unset vuelve al default (cfg => undefined)", () => {
+test("unset reverts to the default (cfg => undefined)", () => {
   fresh();
   setSetting("registry-url", "https://x.com");
   unsetSetting("registry-url");
@@ -51,18 +51,18 @@ test("unset vuelve al default (cfg => undefined)", () => {
   assert.equal(cfg("TOOL_MEMORY_REGISTRY_URL"), undefined);
 });
 
-test("validación rechaza valores inválidos", () => {
+test("validation rejects invalid values", () => {
   fresh();
-  assert.throws(() => setSetting("registry-url", "not-a-url"), /URL inválida/);
-  assert.throws(() => setSetting("cdp-port", "abc"), /entero positivo/);
-  assert.throws(() => setSetting("registry-enabled", "maybe"), /booleano inválido/);
-  assert.throws(() => setSetting("desconocida", "x"), /config desconocida/);
+  assert.throws(() => setSetting("registry-url", "not-a-url"), /invalid URL/);
+  assert.throws(() => setSetting("cdp-port", "abc"), /positive integer/);
+  assert.throws(() => setSetting("registry-enabled", "maybe"), /invalid boolean/);
+  assert.throws(() => setSetting("desconocida", "x"), /unknown config/);
 });
 
-test("home se puede configurar por archivo y relocaliza el data dir", () => {
+test("home can be configured by file and relocates the data dir", () => {
   fresh();
-  // El config.json está anclado a la env (seteada al inicio): sigue resolviéndose ahí.
-  // Sin la env, el data dir (home) lo gobierna el archivo.
+  // config.json is anchored to the env (set at the start): it still resolves there.
+  // Without the env, the data dir (home) is governed by the file.
   const saved = process.env.TOOL_MEMORY_HOME;
   delete process.env.TOOL_MEMORY_HOME;
   try {
@@ -74,7 +74,7 @@ test("home se puede configurar por archivo y relocaliza el data dir", () => {
   }
 });
 
-test("truthy interpreta booleanoides con default", () => {
+test("truthy interprets boolean-ish values with a default", () => {
   assert.equal(truthy(undefined, true), true);
   assert.equal(truthy("", false), false);
   assert.equal(truthy("off", true), false);
@@ -82,21 +82,21 @@ test("truthy interpreta booleanoides con default", () => {
   assert.equal(truthy("on", false), true);
 });
 
-test("el registry remoto está PRENDIDO por defecto", async () => {
+test("the remote registry is ON by default", async () => {
   fresh();
   delete process.env.TOOL_MEMORY_REGISTRY_ENABLED;
   const { registryConfig } = await import("../src/registry/config.ts");
-  // registryConfig se evalúa una vez al importar el módulo; con HOME limpio y sin env
-  // el default tiene que ser true.
+  // registryConfig is evaluated once on import; with a clean HOME and no env
+  // the default has to be true.
   assert.equal(registryConfig.enabled, true);
 });
 
-test("el CLI expone home, registry-url y registry-enabled", () => {
+test("the CLI exposes home, registry-url and registry-enabled", () => {
   const cliKeys = SETTINGS.filter((s) => s.cli).map((s) => s.key);
   assert.deepEqual(cliKeys.sort(), ["home", "registry-enabled", "registry-url"]);
 });
 
-test("effectiveConfig reporta la fuente de cada valor", () => {
+test("effectiveConfig reports the source of each value", () => {
   fresh();
   setSetting("registry-url", "https://file.com");
   process.env.TOOL_MEMORY_RESEED = "off";

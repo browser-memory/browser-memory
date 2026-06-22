@@ -1,13 +1,13 @@
 import { z } from "zod";
 
 /**
- * Esquema del Tool (spec §10.1) y del Índice (§10.3).
+ * Tool schema (spec §10.1) and Index schema (§10.3).
  *
- * Un Tool es la unidad central: una acción web modular, parametrizada y reutilizable.
- * Contiene una receta ejecutable, sus precondiciones (requires) y una aserción de
- * éxito OBLIGATORIA (la red de seguridad que reemplaza la verificación proactiva).
+ * A Tool is the central unit: a modular, parameterized, reusable web action.
+ * It holds an executable recipe, its preconditions (requires) and a MANDATORY success
+ * assertion (the safety net that replaces proactive verification).
  *
- * En el MVP solo modelamos primitivas (type: "primitive").
+ * In the MVP we only model primitives (type: "primitive").
  */
 
 export const SideEffect = z.enum([
@@ -17,9 +17,9 @@ export const SideEffect = z.enum([
 ]);
 export type SideEffect = z.infer<typeof SideEffect>;
 
-// --- Recipe: la parte ejecutable -------------------------------------------------
+// --- Recipe: the executable part -------------------------------------------------
 
-/** Un paso Playwright. `value`/`url`/`expr` admiten placeholders {{param}}. */
+/** A Playwright step. `value`/`url`/`expr` accept {{param}} placeholders. */
 export const PlaywrightStep = z.object({
   action: z.enum([
     "navigate",
@@ -34,14 +34,15 @@ export const PlaywrightStep = z.object({
   url: z.string().optional(),
   selector: z.string().optional(),
   value: z.string().optional(),
-  /** Para assert_precondition / wait_for: selector o expresión a esperar. */
+  /** For assert_precondition / wait_for: selector or expression to wait for. */
   expr: z.string().optional(),
-  /** Timeout puntual en ms (default razonable en el runner). */
+  /** One-off timeout in ms (reasonable default in the runner). */
   timeoutMs: z.number().int().positive().optional(),
   /**
-   * Si true, el paso se OMITE cuando algún {{param}} que referencia no fue provisto.
-   * Sirve para pasos que dependen de un param OPCIONAL (ej. subir una imagen a un
-   * tweet): con el param presente el paso corre, sin él se saltea sin romper el tool.
+   * If true, the step is SKIPPED when some {{param}} it references was not provided.
+   * Useful for steps that depend on an OPTIONAL param (e.g. uploading an image to a
+   * tweet): with the param present the step runs, without it it's skipped without
+   * breaking the tool.
    */
   optional: z.boolean().optional(),
 });
@@ -58,7 +59,7 @@ export const HttpRecipe = z.object({
   url: z.string(),
   headers: z.record(z.string()).optional(),
   body: z.string().optional(),
-  /** Ruta JSON al dato dentro de la respuesta (ej. "data.results"). */
+  /** JSON path to the data within the response (e.g. "data.results"). */
   jsonPath: z.string().optional(),
 });
 
@@ -68,16 +69,16 @@ export const Recipe = z.discriminatedUnion("kind", [
 ]);
 export type Recipe = z.infer<typeof Recipe>;
 
-// --- Precondiciones / postcondición ---------------------------------------------
+// --- Preconditions / postcondition -----------------------------------------------
 
 export const Requires = z.object({
-  /** Precondiciones de datos: params/handles. Mapa nombre → tipo descriptivo. */
+  /** Data preconditions: params/handles. Map name → descriptive type. */
   params: z.record(z.string()).default({}),
-  /** Precondiciones de entorno: estado ambiente verificado por efecto (§7). */
+  /** Environment preconditions: ambient state verified by effect (§7). */
   env: z.record(z.string()).default({}),
 });
 
-/** Lee datos del DOM (evaluate) o del JSON de la respuesta http (jsonPath). */
+/** Reads data from the DOM (evaluate) or from the http response JSON (jsonPath). */
 export const ResultExtractor = z.union([
   z.object({ type: z.literal("dom"), fn: z.string() }),
   z.object({ type: z.literal("json"), jsonPath: z.string() }),
@@ -85,17 +86,17 @@ export const ResultExtractor = z.union([
 export type ResultExtractor = z.infer<typeof ResultExtractor>;
 
 /**
- * Chequeo determinista y barato que confirma el éxito. OBLIGATORIO (§7).
+ * Cheap, deterministic check that confirms success. MANDATORY (§7).
  *
- * `within_ms` (dom/text): ventana de reintento. Muchos confirmadores son asíncronos
- * o transitorios (el toast "Mensaje enviado" de Gmail aparece tras el envío por red y
- * desaparece a los segundos); un único chequeo sincrónico justo tras el click los
- * pierde por carrera. Con `within_ms` el runner reintenta hasta cumplir o agotar la
- * ventana. Default razonable en el runner; subilo para confirmadores lentos.
+ * `within_ms` (dom/text): retry window. Many confirmers are asynchronous or transient
+ * (Gmail's "Message sent" toast appears after the network submit and disappears within
+ * seconds); a single synchronous check right after the click loses them to a race. With
+ * `within_ms` the runner retries until it holds or the window is exhausted. Reasonable
+ * default in the runner; raise it for slow confirmers.
  *
- * `text.contains` admite un string o una LISTA de alternativas (match = cualquiera):
- * robustece contra variantes de wording/idioma ("Mensaje enviado" / "Se envió el
- * mensaje" / "Message sent").
+ * `text.contains` accepts a string or a LIST of alternatives (match = any): hardens
+ * against wording/language variants ("Message sent" / "Your message has been sent" /
+ * "Mensaje enviado").
  */
 export const SuccessAssertion = z.union([
   z.object({
@@ -112,7 +113,7 @@ export const SuccessAssertion = z.union([
 ]);
 export type SuccessAssertion = z.infer<typeof SuccessAssertion>;
 
-// --- Tool primitivo --------------------------------------------------------------
+// --- Primitive tool --------------------------------------------------------------
 
 export const ToolSchema = z.object({
   name: z.string().min(1),
@@ -125,10 +126,10 @@ export const ToolSchema = z.object({
   requires: Requires,
   provides: z.object({ result: z.record(z.string()) }).optional(),
   recipe: Recipe,
-  /** Paso a partir del cual la acción es irreversible (write-irreversible). */
+  /** Step from which the action is irreversible (write-irreversible). */
   commit_step_index: z.number().int().nonnegative().optional(),
   result_extractor: ResultExtractor.optional(),
-  success_assertion: SuccessAssertion, // obligatoria
+  success_assertion: SuccessAssertion, // mandatory
   auth: z
     .object({ needs: z.string(), via: z.string() })
     .nullable()
@@ -153,9 +154,9 @@ export type Tool = z.infer<typeof ToolSchema>;
 // --- Composite (spec §10.2) ------------------------------------------------------
 
 /**
- * Un paso de la cadena: corre `tool`, mapea sus inputs desde params/handles (`in`),
- * y opcionalmente guarda su resultado como un handle (`out`) que pasos siguientes
- * consumen. El pegamento es dato estable (un handle), no estado vivo del navegador.
+ * A chain step: runs `tool`, maps its inputs from params/handles (`in`), and
+ * optionally saves its result as a handle (`out`) that later steps consume. The glue
+ * is stable data (a handle), not live browser state.
  */
 export const ChainStep = z.object({
   tool: z.string(),
@@ -189,10 +190,10 @@ export const CompositeSchema = z.object({
 });
 export type Composite = z.infer<typeof CompositeSchema>;
 
-/** Cualquier item de memoria: primitiva o composite. */
+/** Any memory item: primitive or composite. */
 export type MemoryItem = Tool | Composite;
 
-// --- Índice ----------------------------------------------------------------------
+// --- Index -----------------------------------------------------------------------
 
 export const IndexEntry = z.object({
   name: z.string(),
@@ -200,12 +201,12 @@ export const IndexEntry = z.object({
   type: z.enum(["primitive", "composite"]),
   intent: z.string(),
   keywords: z.array(z.string()),
-  /** side_effect del item; para composites es el más severo de su cadena (o read). */
+  /** the item's side_effect; for composites it's the most severe of its chain (or read). */
   side_effect: SideEffect,
 });
 export type IndexEntry = z.infer<typeof IndexEntry>;
 
-/** Valida y normaliza un objeto crudo a Tool. Lanza ZodError si es inválido. */
+/** Validates and normalizes a raw object into a Tool. Throws ZodError if invalid. */
 export function parseTool(raw: unknown): Tool {
   return ToolSchema.parse(raw);
 }
@@ -214,7 +215,7 @@ export function parseComposite(raw: unknown): Composite {
   return CompositeSchema.parse(raw);
 }
 
-/** Detecta el tipo y valida con el schema correcto. */
+/** Detects the type and validates with the correct schema. */
 export function parseMemoryItem(raw: unknown): MemoryItem {
   const type = (raw as { type?: string })?.type;
   return type === "composite" ? parseComposite(raw) : parseTool(raw);
@@ -232,7 +233,7 @@ export function toIndexEntry(item: MemoryItem): IndexEntry {
       type: "composite",
       intent: item.intent,
       keywords: item.keywords,
-      side_effect: "read", // el runner de composites calcula el real al ejecutar
+      side_effect: "read", // the composite runner computes the real one at execution time
     };
   }
   return {

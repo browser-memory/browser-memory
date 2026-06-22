@@ -2,13 +2,12 @@ import { registryConfig } from "./config.js";
 import { postEvent } from "./client.js";
 
 /**
- * Logging de uso fire-and-forget. El caller NO awaitea: `logEvent` arma el payload,
- * le agrega install_id/client_version y dispara el POST sin esperar. Cualquier error
- * se traga adentro de postEvent. REGLA DURA: nunca mandar valores de params ni secretos;
- * solo nombres en `param_keys`.
+ * Fire-and-forget usage logging. The caller does NOT await: `logEvent` builds the payload,
+ * adds install_id/client_version and fires the POST without waiting. Any error is swallowed
+ * inside postEvent. HARD RULE: never send param values or secrets; only names in `param_keys`.
  */
 
-type FailMode = "re-auth" | "no-aplica" | "tool-roto";
+type FailMode = "re-auth" | "not-applicable" | "tool-broken";
 type ItemType = "primitive" | "composite";
 type Source = "local" | "remote";
 
@@ -34,7 +33,7 @@ export type UsageEventInput =
       param_keys: string[];
     }
   | {
-      // Solo se loguean saves exitosos: un save inválido o rechazado por smoke-run NO se reporta.
+      // Only successful saves are logged: an invalid save or one rejected by smoke-run is NOT reported.
       event_type: "tool_saved";
       tool_name: string;
       item_type: ItemType;
@@ -60,6 +59,6 @@ export function logEvent(e: UsageEventInput): void {
     install_id: registryConfig.installId,
     client_version: registryConfig.clientVersion,
   };
-  // Fire-and-forget: no await. postEvent ya traga sus propios errores.
+  // Fire-and-forget: no await. postEvent already swallows its own errors.
   void postEvent(payload);
 }

@@ -1,24 +1,24 @@
 import type { Tool } from "../schema/tool.js";
 
 /**
- * Validación ESTÁTICA de un tool primitivo: no ejecuta nada, no toca el navegador.
+ * STATIC validation of a primitive tool: it doesn't execute anything, doesn't touch the browser.
  *
- * Razón de ser (§7, complemento del smoke-run): el smoke-run sólo puede correr tools
- * de lectura — un `write-irreversible` (mandar un mail, pagar) no se puede "probar"
- * sin causar el efecto. La estática cubre ese hueco: atrapa la clase de bug que más
- * duele —parámetros mal cableados— sin depender de ejecutar.
+ * Reason for being (§7, complement of the smoke-run): the smoke-run can only run read
+ * tools — a `write-irreversible` (sending an email, paying) can't be "tested"
+ * without causing the effect. The static check covers that gap: it catches the most
+ * painful class of bug —badly wired params— without depending on execution.
  *
- * Detecta exactamente lo que se le escapó al distiller del tool de mercadolibre:
- *  - placeholders con una sola llave ({q} en vez de {{q}}) → nunca se interpolan.
- *  - params declarados que no se usan en ningún lado.
- *  - filtros de placeholder desconocidos.
- *  - extractores que referencian un param "suelto" en vez de leerlo del arg `params`.
+ * It detects exactly what slipped past the distiller in the mercadolibre tool:
+ *  - placeholders with a single brace ({q} instead of {{q}}) → never interpolated.
+ *  - declared params that aren't used anywhere.
+ *  - unknown placeholder filters.
+ *  - extractors that reference a "bare" param instead of reading it from the `params` arg.
  */
 
-/** Mantener en sync con FILTERS de runner/execute.ts. */
+/** Keep in sync with FILTERS in runner/execute.ts. */
 const KNOWN_FILTERS = ["kebab", "lower", "upper", "encode"];
 
-/** Junta todos los strings interpolables de la recipe (donde van los {{param}}). */
+/** Gathers all the interpolable strings of the recipe (where the {{param}} go). */
 function recipeTexts(tool: Tool): string[] {
   const texts: string[] = [];
   if (tool.recipe.kind === "playwright") {
@@ -33,9 +33,9 @@ function recipeTexts(tool: Tool): string[] {
 }
 
 /**
- * Junta los strings que el runner le pasa a Playwright como SELECTOR (no como valor):
- * el `selector` de click/type/fill/press, el `expr`/`selector` de wait_for/
- * assert_precondition, y el `expr` de un success_assertion de tipo dom (va a `page.$`).
+ * Gathers the strings the runner passes to Playwright as a SELECTOR (not as a value):
+ * the `selector` of click/type/fill/press, the `expr`/`selector` of wait_for/
+ * assert_precondition, and the `expr` of a dom-type success_assertion (goes to `page.$`).
  */
 function selectorStrings(tool: Tool): string[] {
   const sels: string[] = [];
@@ -54,72 +54,72 @@ function selectorStrings(tool: Tool): string[] {
 }
 
 /**
- * Notación de snapshot de Playwright-MCP (rol + nombre accesible): `button "Enviar"`,
- * `textbox "Asunto"`. NO es CSS — `page.click` la pasa al parser de CSS, la comilla
- * lo rompe y el tool sale `tool-roto` en el primer run (sin red de smoke para writes).
- * Heurística: una palabra inicial seguida de un string entre comillas. No matchea CSS
- * real (`div[role="button"]`, `[aria-label="x"]`, `.clase`, `#id`): ahí la comilla va
- * dentro de `[...]`, nunca pegada a un token suelto al inicio.
+ * Accessibility snapshot notation (role + accessible name): `button "Enviar"`,
+ * `textbox "Asunto"`. It's NOT CSS — `page.click` passes it to the CSS parser, the quote
+ * breaks it and the tool comes out `tool-broken` on the first run (no smoke net for writes).
+ * Heuristic: an initial word followed by a quoted string. It doesn't match real
+ * CSS (`div[role="button"]`, `[aria-label="x"]`, `.clase`, `#id`): there the quote goes
+ * inside `[...]`, never attached to a bare token at the start.
  */
 const SNAPSHOT_REF = /^\s*[a-zA-Z][\w-]*\s+["']/;
 
-/** Devuelve la lista de problemas (vacía = tool sano). */
+/** Returns the list of problems (empty = healthy tool). */
 export function lintTool(tool: Tool): string[] {
   const problems: string[] = [];
   const declared = Object.keys(tool.requires.params);
   const allText = recipeTexts(tool).join("\n");
   const fn = tool.result_extractor?.type === "dom" ? tool.result_extractor.fn : "";
 
-  // 1. placeholders {{param}} bien formados: registralos y validá el filtro.
+  // 1. well-formed {{param}} placeholders: register them and validate the filter.
   const usedInRecipe = new Set<string>();
   for (const m of allText.matchAll(/\{\{\s*([\w.]+)\s*(?:\|\s*(\w+)\s*)?\}\}/g)) {
     usedInRecipe.add(m[1]);
     if (m[2] && !KNOWN_FILTERS.includes(m[2])) {
       problems.push(
-        `filtro desconocido en {{${m[1]}|${m[2]}}} (válidos: ${KNOWN_FILTERS.join(", ")})`,
+        `unknown filter in {{${m[1]}|${m[2]}}} (valid: ${KNOWN_FILTERS.join(", ")})`,
       );
     }
   }
 
-  // 2. llave simple {param} que no sea {{param}} → placeholder malformado: no se interpola.
+  // 2. single brace {param} that isn't {{param}} → malformed placeholder: not interpolated.
   for (const m of allText.matchAll(/(?<!\{)\{([\w.]+)\}(?!\})/g)) {
     problems.push(
-      `placeholder con una sola llave: {${m[1]}} — ¿quisiste {{${m[1]}}}? (no se interpola)`,
+      `single-brace placeholder: {${m[1]}} — did you mean {{${m[1]}}}? (not interpolated)`,
     );
   }
 
-  // 3. el extractor lee un param vía el arg `params` (params.q / params['q']).
+  // 3. the extractor reads a param via the `params` arg (params.q / params['q']).
   const readsFromParams = (p: string): boolean =>
     new RegExp(`params\\s*(?:\\.\\s*${p}\\b|\\[\\s*['"]${p}['"]\\s*\\])`).test(fn);
 
-  // 4. todo param declarado tiene que usarse en algún lado (recipe o extractor).
+  // 4. every declared param has to be used somewhere (recipe or extractor).
   for (const p of declared) {
     if (!usedInRecipe.has(p) && !readsFromParams(p)) {
       problems.push(
-        `el param '${p}' está declarado pero no se usa en la recipe ni en el extractor`,
+        `the param '${p}' is declared but isn't used in the recipe or the extractor`,
       );
     }
   }
 
-  // 5. el extractor referencia un param "suelto" (variable libre) sin leerlo de params:
-  //    señal de que el distiller esperaba recibirlo como variable, no por el 2º arg.
+  // 5. the extractor references a "bare" param (free variable) without reading it from params:
+  //    a sign the distiller expected to receive it as a variable, not via the 2nd arg.
   for (const p of declared) {
     if (!fn) continue;
     const usesBare = new RegExp(`(?<![\\w.$])${p}\\b`).test(fn);
     if (usesBare && !readsFromParams(p)) {
       problems.push(
-        `el extractor usa '${p}' suelto; los params llegan como 2º argumento — usá params.${p}`,
+        `the extractor uses '${p}' bare; params arrive as the 2nd argument — use params.${p}`,
       );
     }
   }
 
-  // 6. selectores en notación de snapshot (rol + nombre) en vez de CSS: rompen el
-  //    parser de CSS de Playwright en el primer run. El smoke-run no cubre writes.
+  // 6. selectors in snapshot notation (role + name) instead of CSS: they break
+  //    Playwright's CSS parser on the first run. The smoke-run doesn't cover writes.
   for (const sel of selectorStrings(tool)) {
     if (SNAPSHOT_REF.test(sel)) {
       problems.push(
-        `selector en notación de snapshot, no CSS: \`${sel}\` — convertilo a un ` +
-          `selector CSS real (aria-label, clase, atributo), ej. \`[aria-label="..."]\``,
+        `selector in snapshot notation, not CSS: \`${sel}\` — convert it to a ` +
+          `real CSS selector (aria-label, class, attribute), e.g. \`[aria-label="..."]\``,
       );
     }
   }

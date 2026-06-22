@@ -5,22 +5,23 @@ import { fetchRemoteTool } from "./client.js";
 import { logEvent } from "./log.js";
 
 /**
- * Resolución unificada de un item (Opción A). El SERVER es la fuente de verdad (oferta
- * curada): gana sobre una copia local del mismo name. Orden:
- *   1. cache memoria → source "remote-cache" (ya bajada en este proceso; no re-pega al server)
- *   2. pull remoto   → source "remote-pull"  (baja, VALIDA, cachea en memoria; NUNCA a disco)
- *   3. disco local   → source "local"        (fallback: solo si el server no la tiene)
- * Si no está en ningún lado, lanza con el MISMO mensaje que store.loadItem para preservar
- * el contrato `no-aplica` del runner.
+ * Unified resolution of an item (Option A). The SERVER is the source of truth (curated
+ * offering): it wins over a local copy of the same name. Order:
+ *   1. memory cache  → source "remote-cache" (already pulled in this process; doesn't re-hit the server)
+ *   2. remote pull   → source "remote-pull"  (pulls, VALIDATES, caches in memory; NEVER to disk)
+ *   3. local disk    → source "local"        (fallback: only if the server doesn't have it)
+ * If it's nowhere, it throws with the SAME message as store.loadItem to preserve the
+ * runner's `not-applicable` contract.
  *
- * GATE DURO: si el server responde 401/403/429, fetchRemoteTool LANZA y eso se propaga sin
- * caer a local — sin sesión válida no se sirve nada (ni la copia local). El fallback a disco
- * solo ocurre cuando el server respondió 404 (no la tiene) o estaba CAÍDO (5xx/timeout →
- * null), preservando la resiliencia offline para quien ya tiene key.
+ * HARD GATE: if the server responds 401/403/429, fetchRemoteTool THROWS and that propagates
+ * without falling back to local — without a valid session nothing is served (not even the local
+ * copy). The disk fallback only happens when the server responded 404 (doesn't have it) or was
+ * DOWN (5xx/timeout → null), preserving offline resilience for whoever already has a key.
  *
- * Costo de "gana el server": una tool de server se baja en cada run (la cache solo vive lo
- * que dura el proceso). Una tool SOLO local hace un GET que da 404 (silencioso) y cae al
- * disco. Es el precio de tener el server como autoridad y la receta efímera (no en disco).
+ * Cost of "the server wins": a server tool is pulled on each run (the cache only lives as
+ * long as the process). A LOCAL-only tool does a GET that returns 404 (silent) and falls
+ * back to disk. That's the price of having the server as authority and the ephemeral recipe
+ * (not on disk).
  */
 
 export type ResolveSource = "local" | "remote-cache" | "remote-pull";
@@ -30,20 +31,21 @@ export interface Resolved {
   source: ResolveSource;
 }
 
-/** ¿El item vino del server (cache o pull)? Para logging (source: local|remote). */
+/** Did the item come from the server (cache or pull)? For logging (source: local|remote). */
 export function isRemoteSource(s: ResolveSource): boolean {
   return s !== "local";
 }
 
 export async function resolveItem(name: string): Promise<Resolved> {
-  // 1. Cache en memoria (ya pulleada del server en este proceso).
+  // 1. In-memory cache (already pulled from the server in this process).
   const cached = getCached(name);
   if (cached) return { item: cached, source: "remote-cache" };
 
-  // 2. Pull remoto: el server gana. Baja + valida + cachea. Solo acá se emite tool_pulled.
-  //    GATE DURO: un 401/429 (RegistryAuth/RateLimitError) se PROPAGA acá mismo, sin caer a
-  //    local — sin sesión válida no se sirve nada. Los 5xx/timeout NO llegan a tirar (fetchRemoteTool
-  //    los degrada a null), así el fallback local de abajo da resiliencia ante server CAÍDO.
+  // 2. Remote pull: the server wins. Pulls + validates + caches. Only here is tool_pulled emitted.
+  //    HARD GATE: a 401/429 (RegistryAuth/RateLimitError) PROPAGATES right here, without falling
+  //    back to local — without a valid session nothing is served. The 5xx/timeout don't throw
+  //    (fetchRemoteTool degrades them to null), so the local fallback below gives resilience when
+  //    the server is DOWN.
   const pulled = await fetchRemoteTool(name);
   if (pulled) {
     setCached(name, pulled);
@@ -56,12 +58,12 @@ export async function resolveItem(name: string): Promise<Resolved> {
     return { item: pulled, source: "remote-pull" };
   }
 
-  // 3. Fallback a disco local (solo si el server respondió 404 o estaba caído, NO si gateó).
+  // 3. Fallback to local disk (only if the server responded 404 or was down, NOT if it gated).
   try {
     return { item: loadItem(name), source: "local" };
   } catch {
-    // no está local.
+    // not present locally.
   }
 
-  throw new Error(`Item no encontrado en memoria: ${name}`);
+  throw new Error(`Item not found in memory: ${name}`);
 }

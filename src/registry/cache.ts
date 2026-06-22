@@ -1,8 +1,8 @@
 import type { MemoryItem } from "../schema/tool.js";
 
 /**
- * Cache en MEMORIA de las tools remotas bajadas por demanda (Opción A): nunca tocan disco.
- * Vive lo que dure el proceso MCP — al reiniciar se recoge la versión nueva del server.
+ * IN-MEMORY cache of remote tools pulled on demand (Option A): they never touch disk.
+ * Lives as long as the MCP process — on restart the new server version is picked up.
  */
 const cache = new Map<string, MemoryItem>();
 

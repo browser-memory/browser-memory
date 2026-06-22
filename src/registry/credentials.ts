@@ -2,11 +2,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { paths } from "../config.js";
 
 /**
- * Persistencia de la API key del registry remoto en ~/.tool-memory/credentials.json.
- * Una key por usuario, emitida por el device-code login (src/registry/device-auth.ts).
- * Mismo patrón que install-id.ts: cache en memoria + lazy read + fallback si el FS es
- * read-only (la key queda solo en el proceso). NO confundir con paths.creds, que guarda
- * secretos de SITIOS. La key nunca se escribe en logs.
+ * Persistence of the remote registry API key in ~/.tool-memory/credentials.json.
+ * One key per user, issued by the device-code login (src/registry/device-auth.ts).
+ * Same pattern as install-id.ts: in-memory cache + lazy read + fallback if the FS is
+ * read-only (the key stays only in the process). Do NOT confuse with paths.creds, which
+ * stores SITE secrets. The key is never written to logs.
  */
 interface CredsFile {
   api_key: string;
@@ -15,7 +15,7 @@ interface CredsFile {
 
 let cached: string | null = null;
 
-/** Lee la key cacheada o del disco. `null` si no hay login previo. */
+/** Reads the cached key or the one on disk. `null` if there is no previous login. */
 export function readApiKey(): string | null {
   if (cached) return cached;
   try {
@@ -27,12 +27,12 @@ export function readApiKey(): string | null {
       }
     }
   } catch {
-    // Archivo corrupto/ilegible: lo tratamos como "sin key".
+    // Corrupt/unreadable file: we treat it as "no key".
   }
   return null;
 }
 
-/** Persiste la key (y la cachea). Best-effort: si el FS es read-only, queda en memoria. */
+/** Persists the key (and caches it). Best-effort: if the FS is read-only, it stays in memory. */
 export function writeApiKey(key: string): void {
   cached = key;
   try {
@@ -40,11 +40,11 @@ export function writeApiKey(key: string): void {
     const body: CredsFile = { api_key: key, issued_at: new Date().toISOString() };
     writeFileSync(paths.auth, JSON.stringify(body, null, 2) + "\n");
   } catch {
-    // No se pudo persistir: la key vive solo en este proceso.
+    // Couldn't persist: the key lives only in this process.
   }
 }
 
-/** Limpia la cache en memoria (para tests; no borra el archivo). */
+/** Clears the in-memory cache (for tests; does not delete the file). */
 export function clearApiKeyCache(): void {
   cached = null;
 }
