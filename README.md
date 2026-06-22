@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://browser-memory.com">
-    <img src="https://raw.githubusercontent.com/frisbee-one/browser-memory/main/assets/banner.png" alt="browser-memory" width="640">
+    <img src="https://browser-memory.com/banner.png" alt="browser-memory" width="640">
   </a>
 </p>
 
@@ -11,8 +11,7 @@
 </p>
 
 <p align="center">
-  <b>Give your AI agent a reusable memory of web actions.</b><br>
-  The first time it does something on a site it <i>learns</i> the steps; every time after, it <i>replays</i> them — no exploring, no model in the loop.
+  <b>Give your AI agent a reusable memory of web actions.</b>
 </p>
 
 ---
