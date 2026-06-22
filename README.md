@@ -1,9 +1,27 @@
-# browser-memory
+<p align="center">
+  <a href="https://browser-memory.com">
+    <img src="assets/banner.svg" alt="browser-memory" width="640">
+  </a>
+</p>
 
-**Give your AI agent a reusable memory of web actions.** The first time it does
-something on a website, it *learns* the steps and saves them as a tool. Every
-time after that, it *replays* that tool directly — no exploring, no model in the
-loop, same result.
+<p align="center">
+  <a href="https://browser-memory.com"><img src="https://img.shields.io/badge/docs-browser--memory.com-4ade80?style=for-the-badge&labelColor=0a0a0a" alt="Docs"></a>
+  <a href="https://www.npmjs.com/package/browser-memory"><img src="https://img.shields.io/npm/v/browser-memory?style=for-the-badge&logo=npm&color=4ade80&labelColor=0a0a0a" alt="npm version"></a>
+  <a href="https://github.com/frisbee-one/browser-memory/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/frisbee-one/browser-memory/ci.yml?style=for-the-badge&label=CI&color=4ade80&labelColor=0a0a0a" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4ade80?style=for-the-badge&labelColor=0a0a0a" alt="License MIT"></a>
+  <img src="https://img.shields.io/node/v/browser-memory?style=for-the-badge&color=4ade80&labelColor=0a0a0a" alt="Node">
+</p>
+
+<p align="center">
+  <b>Give your AI agent a reusable memory of web actions.</b><br>
+  Make your browsing agent <b>20× faster</b> with <b>4× fewer tokens</b> — stop re-learning the same page every visit.
+</p>
+
+---
+
+The first time your agent does something on a website, it *learns* the steps and
+saves them as a tool. Every time after that, it *replays* that tool directly — no
+exploring, no model in the loop, same result.
 
 Open source (MIT). It runs on your machine and your memory is yours.
 

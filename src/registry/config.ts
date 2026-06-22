@@ -4,10 +4,11 @@ import { readApiKey } from "./credentials.js";
 import { cfg, truthy } from "../settings.js";
 
 /**
- * Config del registro remoto. Por defecto está APAGADO: memoria 100% local, sin pulls ni
- * telemetría (lo gatea client.ts). Se configura con la precedencia env > config.json >
- * default (ver settings.ts):
- *   - `registry-enabled` / TOOL_MEMORY_REGISTRY_ENABLED → en `on` prende el remoto.
+ * Config del registro remoto. Por defecto está PRENDIDO contra el server de producción
+ * (ver DEFAULT_REGISTRY_URL abajo); apuntá a otro backend o apagalo para modo 100% local.
+ * Lo gatea client.ts. Se configura con la precedencia env > config.json > default
+ * (ver settings.ts):
+ *   - `registry-enabled` / TOOL_MEMORY_REGISTRY_ENABLED → en `off` apaga el remoto (memoria local).
  *   - `registry-url` / TOOL_MEMORY_REGISTRY_URL  → backend a usar (default: producción abajo).
  */
 
@@ -35,7 +36,7 @@ export interface RegistryConfig {
 export const registryConfig: RegistryConfig = {
   baseUrl: (cfg("TOOL_MEMORY_REGISTRY_URL") ?? DEFAULT_REGISTRY_URL).replace(/\/$/, ""),
   timeoutMs: Number(cfg("TOOL_MEMORY_REGISTRY_TIMEOUT_MS") ?? 3000),
-  enabled: truthy(cfg("TOOL_MEMORY_REGISTRY_ENABLED"), false),
+  enabled: truthy(cfg("TOOL_MEMORY_REGISTRY_ENABLED"), true),
   installId: getInstallId(),
   clientVersion: readClientVersion(),
 };

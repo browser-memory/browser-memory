@@ -37,7 +37,7 @@ function printHelp(): void {
 Sin argumentos arranca el MCP server (stdio). Subcomandos:
 
   config show                 muestra la config y de dónde sale cada valor
-  config server <on|off>      prende/apaga el registry remoto (off = 100% local)
+  config server <on|off>      prende/apaga el registry remoto (default on; off = 100% local)
   config set-url <url>        cambia la URL del registry remoto
   config get <clave>          imprime el valor efectivo de una clave
   config set <clave> <valor>  persiste una clave en ${configPath}

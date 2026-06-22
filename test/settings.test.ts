@@ -82,13 +82,13 @@ test("truthy interpreta booleanoides con default", () => {
   assert.equal(truthy("on", false), true);
 });
 
-test("el registry remoto está APAGADO por defecto", async () => {
+test("el registry remoto está PRENDIDO por defecto", async () => {
   fresh();
   delete process.env.TOOL_MEMORY_REGISTRY_ENABLED;
   const { registryConfig } = await import("../src/registry/config.ts");
   // registryConfig se evalúa una vez al importar el módulo; con HOME limpio y sin env
-  // el default tiene que ser false.
-  assert.equal(registryConfig.enabled, false);
+  // el default tiene que ser true.
+  assert.equal(registryConfig.enabled, true);
 });
 
 test("el CLI expone home, registry-url y registry-enabled", () => {

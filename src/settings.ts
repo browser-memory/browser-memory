@@ -73,8 +73,8 @@ export const SETTINGS: SettingDef[] = [
   {
     key: "registry-enabled",
     env: "TOOL_MEMORY_REGISTRY_ENABLED",
-    describe: "Prender/apagar el registry remoto (default off = memoria 100% local)",
-    defaultDesc: "off",
+    describe: "Prender/apagar el registry remoto (default on; off = memoria 100% local)",
+    defaultDesc: "on",
     validate: boolish,
     cli: true,
   },
