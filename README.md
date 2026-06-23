@@ -16,21 +16,13 @@
 
 ---
 
-A single, self-contained MCP server (open source, MIT). It runs on your machine, drives its own Chrome, and your memory is yours.
-
 ## Install
 
 Requires Node.js ≥ 20 and Chrome (uses your system Google Chrome if present, otherwise Playwright's Chromium).
 
-One command configures every supported agent it finds — **Codex, Cursor, VS Code (Copilot) and Claude Code**:
+One command configures any supported agent — **Codex, Cursor, VS Code (Copilot) and Claude Code**.
 
-All detected hosts:
-
-```bash
-npx -y browser-memory install
-```
-
-Or a single host (`codex` · `cursor` · `vscode` · `claude`):
+Install for a host (`codex` · `cursor` · `vscode` · `claude`):
 
 ```bash
 npx -y browser-memory install codex
@@ -39,7 +31,7 @@ npx -y browser-memory install codex
 Undo (same host forms):
 
 ```bash
-npx -y browser-memory uninstall
+npx -y browser-memory uninstall codex
 ```
 
 It's idempotent (never overwrites an existing entry). Restart the app afterwards.
@@ -69,5 +61,5 @@ npx browser-memory config server on
 Point it at another backend:
 
 ```bash
-npx browser-memory config set-url https://api.browser-memory.com
+npx browser-memory config set-url https://your-registry.example.com
 ```
