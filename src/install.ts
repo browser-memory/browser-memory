@@ -158,6 +158,22 @@ export function jsonRemoveServer(file: string, mapKey: JsonKey): "removed" | "ab
 // Claude Code — delegate to its own CLI (never hand-edit ~/.claude.json)
 // ---------------------------------------------------------------------------
 
+/**
+ * True if Claude's CLI output means "the server wasn't there" (a benign no-op, not an error).
+ * Claude phrases this several ways across versions — most notably "No user-scoped MCP server
+ * found with name: …", which contains neither "not found" nor "no mcp" as a contiguous run — so
+ * we match every known wording rather than a single substring.
+ */
+export function claudeSaysAbsent(text: string): boolean {
+  return [
+    "not found",
+    "no mcp",
+    "does not",
+    "no user-scoped",
+    "no such",
+  ].some((p) => text.includes(p));
+}
+
 /** True if `cmd` is an executable on PATH. Pure lookup — does not run anything. */
 export function commandExists(cmd: string): boolean {
   const dirs = (process.env.PATH || "").split(delimiter).filter(Boolean);
@@ -200,8 +216,7 @@ function claudeUninstall(): HostResult {
   const r = spawnSync("claude", ["mcp", "remove", "--scope", "user", KEY], { encoding: "utf8" });
   if (r.status === 0) return { host: "claude", status: "removed" };
   const text = `${r.stdout ?? ""}${r.stderr ?? ""}`.toLowerCase();
-  if (text.includes("not found") || text.includes("no mcp") || text.includes("does not"))
-    return { host: "claude", status: "absent" };
+  if (claudeSaysAbsent(text)) return { host: "claude", status: "absent" };
   return {
     host: "claude",
     status: "error",

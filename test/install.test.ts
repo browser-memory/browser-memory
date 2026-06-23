@@ -20,6 +20,7 @@ import {
   jsonAddServer,
   jsonRemoveServer,
   commandExists,
+  claudeSaysAbsent,
   detectedHosts,
   installHost,
   uninstallHost,
@@ -146,6 +147,16 @@ test("commandExists finds an executable on a controlled PATH", () => {
     if (prev === undefined) delete process.env.PATH;
     else process.env.PATH = prev;
   }
+});
+
+test("claudeSaysAbsent matches Claude's real 'nothing to remove' wordings", () => {
+  // The exact message that surfaced the bug (case-insensitive — caller lowercases first).
+  assert.ok(claudeSaysAbsent("no user-scoped mcp server found with name: browser-memory"));
+  assert.ok(claudeSaysAbsent("no mcp server with name browser-memory"));
+  assert.ok(claudeSaysAbsent("server browser-memory not found"));
+  assert.ok(claudeSaysAbsent("no such server"));
+  // A genuine failure must NOT be swallowed as "absent".
+  assert.ok(!claudeSaysAbsent("permission denied writing ~/.claude.json"));
 });
 
 test("detectedHosts lists only hosts whose config dir exists", () => {
