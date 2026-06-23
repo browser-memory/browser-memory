@@ -14,6 +14,8 @@ import {
   uninstallHost,
   detectedHosts,
 } from "./install.js";
+import { rmSync, existsSync } from "node:fs";
+import { paths } from "./config.js";
 
 /**
  * Configuration CLI: `browser-memory config ...`. Dispatched BEFORE starting the MCP
@@ -47,6 +49,8 @@ With no arguments it starts the MCP server (stdio). Subcommands:
   install [host]              add this server to a host's MCP config
                                 host: codex | cursor | vscode | claude · omit = autodetect
   uninstall [host]            remove it again (same hosts; omit = autodetect)
+  reset-profile               delete the dedicated Chrome profile (a copy) so the
+                                next launch re-seeds fresh from your real Chrome
   config show                 show the config and where each value comes from
   config server <on|off>      turn the remote registry on/off (default on; off = 100% local)
   config set-url <url>        change the remote registry URL
@@ -138,6 +142,29 @@ function runInstall(action: "install" | "uninstall", host: string): void {
   }
 }
 
+/**
+ * `reset-profile`: removes the dedicated Chrome profile (a COPY the server maintains). The next
+ * launch re-seeds it fresh from your real Chrome. Never touches the real browser, your tools, or
+ * the index — only `<home>/chrome-profile`. Respects TOOL_MEMORY_HOME via paths.chromeProfile.
+ */
+function runResetProfile(): void {
+  const dir = paths.chromeProfile;
+  try {
+    if (!existsSync(dir)) {
+      out(`• No dedicated profile to remove (${dir})`);
+      return;
+    }
+    rmSync(dir, { recursive: true, force: true });
+    out(`✓ Dedicated Chrome profile removed (${dir})`);
+    out("  The next discover/run re-seeds it from your real Chrome.");
+  } catch (e) {
+    err(`error: could not remove ${dir}: ${(e as Error).message}`);
+    err("  The dedicated Chrome may still be running and locking the folder.");
+    err("  Stop the MCP server (close the app/editor) and try again.");
+    process.exitCode = 1;
+  }
+}
+
 /** Handles the CLI. Sets process.exitCode=1 on usage error. Never starts the server. */
 export function runCli(argv: string[]): void {
   const [cmd, ...rest] = argv;
@@ -149,6 +176,11 @@ export function runCli(argv: string[]): void {
 
   if (cmd === "install" || cmd === "uninstall") {
     runInstall(cmd, (rest[0] ?? "").toLowerCase());
+    return;
+  }
+
+  if (cmd === "reset-profile") {
+    runResetProfile();
     return;
   }
 
