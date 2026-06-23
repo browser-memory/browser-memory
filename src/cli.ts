@@ -6,6 +6,14 @@ import {
   resetConfig,
   configPath,
 } from "./settings.js";
+import {
+  HOSTS,
+  type Host,
+  type HostResult,
+  installHost,
+  uninstallHost,
+  detectedHosts,
+} from "./install.js";
 
 /**
  * Configuration CLI: `browser-memory config ...`. Dispatched BEFORE starting the MCP
@@ -36,6 +44,9 @@ function printHelp(): void {
 
 With no arguments it starts the MCP server (stdio). Subcommands:
 
+  install [host]              add this server to a host's MCP config
+                                host: codex | cursor | vscode | claude · omit = autodetect
+  uninstall [host]            remove it again (same hosts; omit = autodetect)
   config show                 show the config and where each value comes from
   config server <on|off>      turn the remote registry on/off (default on; off = 100% local)
   config set-url <url>        change the remote registry URL
@@ -77,12 +88,67 @@ function applied(key: string, value: string): void {
   out("  Restart the MCP server for it to take effect.");
 }
 
+/** One human-readable line per host result. */
+function fmtResult(r: HostResult): string {
+  const at = r.path ? ` (${r.path})` : "";
+  switch (r.status) {
+    case "added":
+      return `  ✓ ${r.host} added${at}`;
+    case "already":
+      return `  • ${r.host} already configured${at}`;
+    case "removed":
+      return `  ✓ ${r.host} removed${at}`;
+    case "absent":
+      return `  • ${r.host} was not configured${at}`;
+    case "unavailable":
+      return `  ⚠ ${r.host}: ${r.message ?? "host CLI not found"}`;
+    case "error":
+      return `  ✗ ${r.host}: ${r.message ?? "failed"}`;
+  }
+}
+
+/** `install [host]` / `uninstall [host]`. Empty host = every detected host. */
+function runInstall(action: "install" | "uninstall", host: string): void {
+  const run = (h: Host) => (action === "install" ? installHost(h) : uninstallHost(h));
+  try {
+    let results: HostResult[];
+    if (!host) {
+      const hosts = detectedHosts();
+      if (hosts.length === 0) {
+        out("No supported hosts detected (looked for Codex, Cursor, VS Code, Claude Code).");
+        out(`Pass one explicitly, e.g. \`${action} codex\`.`);
+        return;
+      }
+      out(`Detected: ${hosts.join(", ")}`);
+      results = hosts.map(run);
+    } else if ((HOSTS as string[]).includes(host)) {
+      results = [run(host as Host)];
+    } else {
+      throw new Error(
+        `unknown host "${host}" — supported: ${HOSTS.join(", ")} (or omit to autodetect)`,
+      );
+    }
+    for (const r of results) out(fmtResult(r));
+    if (action === "install" && results.some((r) => r.status === "added"))
+      out("  Restart the affected app(s) for the change to take effect.");
+    if (results.some((r) => r.status === "error")) process.exitCode = 1;
+  } catch (e) {
+    err(`error: ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+}
+
 /** Handles the CLI. Sets process.exitCode=1 on usage error. Never starts the server. */
 export function runCli(argv: string[]): void {
   const [cmd, ...rest] = argv;
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
+    return;
+  }
+
+  if (cmd === "install" || cmd === "uninstall") {
+    runInstall(cmd, (rest[0] ?? "").toLowerCase());
     return;
   }
 

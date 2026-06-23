@@ -100,6 +100,13 @@ export const SETTINGS: SettingDef[] = [
     validate: nonEmpty,
   },
   {
+    key: "sqlite-bin",
+    env: "TOOL_MEMORY_SQLITE_BIN",
+    describe: "sqlite3 binary for consistent auth-DB backup (fallback: raw file copy)",
+    defaultDesc: "sqlite3 on PATH or common locations",
+    validate: nonEmpty,
+  },
+  {
     key: "reseed",
     env: "TOOL_MEMORY_RESEED",
     describe: "Refresh session/login from your real Chrome on every launch",

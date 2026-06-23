@@ -7,8 +7,9 @@ import {
   readFileSync,
   writeFileSync,
 } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, dirname } from "node:path";
 import { chromium } from "playwright";
+import { sqliteBackup } from "./sqlite-backup.js";
 import {
   cdpPort,
   cdpEndpoint,
@@ -77,6 +78,13 @@ function seedProfileIfEmpty(): void {
   if (existsSync(localState)) {
     cpSync(localState, join(paths.chromeProfile, "Local State"));
   }
+  // Overwrite the just-copied auth DBs with a transactionally-consistent backup (the real Chrome
+  // may be open). Best-effort: if sqlite3 isn't available the raw cpSync copy above stands.
+  for (const rel of authDbRelPaths(srcProfile)) {
+    const dst = join(dstDefault, rel);
+    mkdirSync(dirname(dst), { recursive: true });
+    sqliteBackup(join(srcProfile, rel), dst);
+  }
   disableSessionRestore();
   process.stderr.write(
     `[tool-memory] Profile "${profile}" seeded from ${srcRoot} (logged-in accounts, no caches).\n`,
@@ -94,6 +102,19 @@ const SQLITE_SIDECARS = ["", "-wal", "-shm", "-journal"];
 const AUTH_FILES = AUTH_BASES.flatMap((b) => SQLITE_SIDECARS.map((s) => b + s));
 /** Session/auth directories (modern cookies live in Network/). */
 const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
+
+/**
+ * Relative paths (within a profile) of the auth DBs that are SQLite and worth copying with a
+ * consistent online backup. Cookies moved from the profile root to Network/ in modern Chrome, so
+ * we honor whichever layout the source uses; `Login Data`/`Web Data` stay at the root. The caller
+ * mirrors each rel path to the same location in the destination profile.
+ */
+function authDbRelPaths(srcProfile: string): string[] {
+  const cookies = existsSync(join(srcProfile, "Network", "Cookies"))
+    ? join("Network", "Cookies")
+    : "Cookies";
+  return [cookies, "Login Data", "Web Data"];
+}
 
 /**
  * Refreshes ONLY the session/auth files from the real Chrome (not the whole profile).
@@ -122,6 +143,17 @@ function reseedAuth(): void {
     const dst = join(dstDefault, d);
     rmSync(dst, { recursive: true, force: true }); // avoids mixing old/new leveldb
     cpSync(src, dst, { recursive: true, filter: (p) => !CACHE_DIRS.has(basename(p)) });
+  }
+  // Run AFTER the loops above (so Default/Network/ already exists): overwrite the raw-copied auth
+  // DBs with a consistent online backup. On failure the raw cpSync copy stands (fallback). The
+  // AUTH_FILES loop already handled removal of a stale dst when the source base disappeared, so we
+  // only act when the source exists here (no competing rmSync). LevelDB stores stay raw-copied.
+  for (const rel of authDbRelPaths(srcProfile)) {
+    const src = join(srcProfile, rel);
+    if (!existsSync(src)) continue;
+    const dst = join(dstDefault, rel);
+    mkdirSync(dirname(dst), { recursive: true });
+    sqliteBackup(src, dst);
   }
   const localState = join(srcRoot, "Local State");
   if (existsSync(localState)) {
