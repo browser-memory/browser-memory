@@ -36,6 +36,40 @@ function macAppBundle(exePath: string): string | undefined {
   return i === -1 ? undefined : exePath.slice(0, i + ".app".length);
 }
 
+/** Marker (inside the profile dir) that says THIS no-seed version owns this profile. */
+const MANAGED_MARKER = ".bm-managed";
+
+/**
+ * One-time UPGRADE cleanup. Older versions SEEDED this dedicated profile from the user's real
+ * Chrome and RESEEDED it on every launch, so a user who upgrades is left with a profile full of
+ * stale cookies (and the now-removed reseed would have clobbered any fresh login). Those versions
+ * never wrote our marker.
+ *
+ * So the rule: if a profile already exists here but has NO marker, it can only have come from a
+ * seeding version → wipe it ONCE for a clean start (the user logs in by hand and it then persists).
+ * After that the marker is present and we never touch the profile again. A fresh install (no
+ * profile yet) just gets the marker, nothing is wiped. The wipe is gated on a `Default` dir
+ * existing, so even if writing the marker ever fails we never wipe a profile we just created.
+ * Best-effort: a locked/read-only dir never blocks startup (worst case we keep the old profile).
+ */
+export function migrateLegacyProfile(): void {
+  const marker = join(paths.chromeProfile, MANAGED_MARKER);
+  try {
+    if (existsSync(marker)) return; // already ours: never wipe.
+    if (existsSync(join(paths.chromeProfile, "Default"))) {
+      rmSync(paths.chromeProfile, { recursive: true, force: true });
+      process.stderr.write(
+        "[tool-memory] Reset the dedicated Chrome profile once (it came from an older version " +
+          "that copied your real Chrome). Log in by hand; the session persists from now on.\n",
+      );
+    }
+    mkdirSync(paths.chromeProfile, { recursive: true });
+    writeFileSync(marker, new Date().toISOString() + "\n");
+  } catch {
+    // best-effort: never block startup on a locked/read-only profile dir.
+  }
+}
+
 /**
  * Leaves the profile ready to start WITHOUT restoring last run's tabs and without the
  * "Chrome didn't shut down properly" bubble: deletes the session/tab files and forces
@@ -97,6 +131,8 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
     return { cdpEndpoint, reused: true };
   }
 
+  // One-time: wipe a profile left by an older seeding version (no-op afterwards).
+  migrateLegacyProfile();
   mkdirSync(paths.chromeProfile, { recursive: true });
   // Reuse the persistent dedicated profile as-is; only strip the tab-restore noise.
   disableSessionRestore();
