@@ -300,8 +300,10 @@ export async function tabs(
     throw new Error(`tab index out of range: ${index}`);
   }
   if (action === "select") {
+    // Set the active page WITHOUT bringToFront: exploration drives the tab over CDP no
+    // matter which one is visually frontmost, and raising it would pull the background
+    // Chrome window to the foreground (we keep it in the background, see chrome.ts).
     activePage = pages[index];
-    await activePage.bringToFront().catch(() => {});
     wirePage(activePage);
     return { ok: true };
   }

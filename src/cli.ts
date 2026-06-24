@@ -49,8 +49,8 @@ With no arguments it starts the MCP server (stdio). Subcommands:
   install [host]              add this server to a host's MCP config
                                 host: codex | cursor | vscode | claude · omit = autodetect
   uninstall [host]            remove it again (same hosts; omit = autodetect)
-  reset-profile               delete the dedicated Chrome profile (a copy) so the
-                                next launch re-seeds fresh from your real Chrome
+  reset-profile               delete the dedicated Chrome profile so the next
+                                launch starts empty (you log in again by hand)
   config show                 show the config and where each value comes from
   config server <on|off>      turn the remote registry on/off (default on; off = 100% local)
   config set-url <url>        change the remote registry URL
@@ -143,9 +143,9 @@ function runInstall(action: "install" | "uninstall", host: string): void {
 }
 
 /**
- * `reset-profile`: removes the dedicated Chrome profile (a COPY the server maintains). The next
- * launch re-seeds it fresh from your real Chrome. Never touches the real browser, your tools, or
- * the index — only `<home>/chrome-profile`. Respects TOOL_MEMORY_HOME via paths.chromeProfile.
+ * `reset-profile`: removes the dedicated Chrome profile. The next launch starts EMPTY (you log
+ * in again by hand once). Never touches the real browser, your tools, or the index — only
+ * `<home>/chrome-profile`. Respects TOOL_MEMORY_HOME via paths.chromeProfile.
  */
 function runResetProfile(): void {
   const dir = paths.chromeProfile;
@@ -156,7 +156,7 @@ function runResetProfile(): void {
     }
     rmSync(dir, { recursive: true, force: true });
     out(`✓ Dedicated Chrome profile removed (${dir})`);
-    out("  The next discover/run re-seeds it from your real Chrome.");
+    out("  The next discover/run starts with an empty browser; log in again by hand once.");
   } catch (e) {
     err(`error: could not remove ${dir}: ${(e as Error).message}`);
     err("  The dedicated Chrome may still be running and locking the folder.");

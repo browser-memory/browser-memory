@@ -1,174 +1,46 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import {
-  mkdirSync,
-  existsSync,
-  cpSync,
-  rmSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import { join, basename, dirname } from "node:path";
+import { spawn, execFileSync, type ChildProcess } from "node:child_process";
+import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { chromium } from "playwright";
-import { sqliteBackup } from "./sqlite-backup.js";
-import {
-  cdpPort,
-  cdpEndpoint,
-  paths,
-  resolveChromeBinary,
-  realChromeUserDataDir,
-  resolveSeedProfile,
-  reseedEnabled,
-} from "../config.js";
+import { cdpPort, cdpEndpoint, paths, resolveChromeBinary } from "../config.js";
 
 /**
  * Owner of the lifecycle of this server's dedicated Chrome (spec §4).
  *
- * Launches ONE Chrome instance with a persistent dedicated profile and an INTERNAL
- * remote-debugging port. Both the replay runner (via connectOverCDP) and the exploration
- * tools (browser/explore.ts) attach to the SAME Chrome, so they see the same state: tabs,
- * DOM, and session. It's a dedicated Chrome: it doesn't touch the user's browser nor
- * depend on any other browser server.
+ * Launches ONE Chrome with a DEDICATED, PERSISTENT profile and an INTERNAL remote-debugging
+ * port. Both the replay runner (via connectOverCDP) and the exploration tools
+ * (browser/explore.ts) attach to the SAME Chrome, so they see the same state: tabs, DOM, session.
  *
- * Idempotent startup: if there's already a Chrome listening on the port, it reuses it
- * instead of relaunching (avoids the profile lock).
+ * The profile is the Playwright `launchPersistentContext` model: empty the FIRST time, then
+ * reused AS-IS on every later launch and across Claude sessions. It lives on disk at
+ * `<home>/chrome-profile` (see config.ts). We NEVER copy from the user's real Chrome, so it
+ * never starts with stale cookies and a login you do here (LinkedIn, etc.) survives — nothing
+ * clobbers it. It's a dedicated Chrome: it doesn't touch the user's browser nor depend on any
+ * other browser server.
+ *
+ * Idempotent startup: if there's already a Chrome listening on the port, it reuses it instead
+ * of relaunching (avoids the profile lock).
  */
 
 let child: ChildProcess | undefined;
-
-/** Cache subdirectories we do NOT copy when seeding (they are most of the weight). */
-const CACHE_DIRS = new Set([
-  "Cache",
-  "Code Cache",
-  "GPUCache",
-  "DawnCache",
-  "DawnGraphiteCache",
-  "DawnWebGPUCache",
-  "GraphiteDawnCache",
-  "Application Cache",
-  "Media Cache",
-  "CacheStorage",
-  "ScriptCache",
-  "Service Worker",
-]);
+/** true when we launched Chrome detached via `open` (no child handle: we kill it by CDP port). */
+let launchedInBackground = false;
 
 /**
- * Seeds the dedicated profile from the user's real Chrome — ONLY the first time (if there's
- * no Default yet). Copies the sessions/accounts (Cookies, Login Data, Local Storage, etc.)
- * skipping the caches, and `Local State` so cookie encryption is consistent. Best-effort: if
- * there's no real profile, we start empty and the user logs in by hand once.
+ * If `exePath` lives inside a macOS `.app` bundle, returns the bundle path (so we can launch
+ * it with `open -g` and keep it in the background). Returns undefined otherwise.
+ * e.g. ".../Google Chrome.app/Contents/MacOS/Google Chrome" → ".../Google Chrome.app".
  */
-function seedProfileIfEmpty(): void {
-  const dstDefault = join(paths.chromeProfile, "Default");
-  if (existsSync(dstDefault)) return; // already seeded / already in use: don't touch.
-
-  const srcRoot = realChromeUserDataDir();
-  if (!srcRoot) return; // no detectable real Chrome: starts empty.
-  const profile = resolveSeedProfile(srcRoot); // most-used profile, not always "Default".
-  const srcProfile = join(srcRoot, profile);
-  if (!existsSync(srcProfile)) return;
-
-  mkdirSync(paths.chromeProfile, { recursive: true });
-  // The chosen profile (e.g. "Profile 2") is ALWAYS copied to the "Default" of the dedicated
-  // dir, which is the one Chrome uses when starting with --user-data-dir without --profile-directory.
-  cpSync(srcProfile, dstDefault, {
-    recursive: true,
-    filter: (src) => !CACHE_DIRS.has(basename(src)),
-  });
-  const localState = join(srcRoot, "Local State");
-  if (existsSync(localState)) {
-    cpSync(localState, join(paths.chromeProfile, "Local State"));
-  }
-  // Overwrite the just-copied auth DBs with a transactionally-consistent backup (the real Chrome
-  // may be open). Best-effort: if sqlite3 isn't available the raw cpSync copy above stands.
-  for (const rel of authDbRelPaths(srcProfile)) {
-    const dst = join(dstDefault, rel);
-    mkdirSync(dirname(dst), { recursive: true });
-    sqliteBackup(join(srcProfile, rel), dst);
-  }
-  disableSessionRestore();
-  process.stderr.write(
-    `[tool-memory] Profile "${profile}" seeded from ${srcRoot} (logged-in accounts, no caches).\n`,
-  );
+function macAppBundle(exePath: string): string | undefined {
+  const i = exePath.indexOf(".app/");
+  return i === -1 ? undefined : exePath.slice(0, i + ".app".length);
 }
 
 /**
- * Base SQLite files for session/auth that we refresh on every re-seed. For each base we
- * also copy its sidecars (-wal, -shm, -journal): with the real Chrome OPEN, freshly written
- * cookies live in the -wal still unflushed, so copying only the main file would give a stale
- * snapshot. Copying the three together preserves the state.
- */
-const AUTH_BASES = ["Cookies", "Login Data", "Web Data"];
-const SQLITE_SIDECARS = ["", "-wal", "-shm", "-journal"];
-const AUTH_FILES = AUTH_BASES.flatMap((b) => SQLITE_SIDECARS.map((s) => b + s));
-/** Session/auth directories (modern cookies live in Network/). */
-const AUTH_DIRS = ["Network", "Local Storage", "Session Storage"];
-
-/**
- * Relative paths (within a profile) of the auth DBs that are SQLite and worth copying with a
- * consistent online backup. Cookies moved from the profile root to Network/ in modern Chrome, so
- * we honor whichever layout the source uses; `Login Data`/`Web Data` stay at the root. The caller
- * mirrors each rel path to the same location in the destination profile.
- */
-function authDbRelPaths(srcProfile: string): string[] {
-  const cookies = existsSync(join(srcProfile, "Network", "Cookies"))
-    ? join("Network", "Cookies")
-    : "Cookies";
-  return [cookies, "Login Data", "Web Data"];
-}
-
-/**
- * Refreshes ONLY the session/auth files from the real Chrome (not the whole profile).
- * Meant to run on every launch if reseedEnabled: it carries over new logins quickly and
- * without wearing the disk. Best-effort: if there's no seeded profile yet, it leaves it to
- * seedProfileIfEmpty; if the real Chrome is open, it copies the latest on-disk state (which
- * may be slightly behind, but doesn't break).
- */
-function reseedAuth(): void {
-  const srcRoot = realChromeUserDataDir();
-  if (!srcRoot) return;
-  const profile = resolveSeedProfile(srcRoot); // same profile as the initial seed.
-  const srcProfile = join(srcRoot, profile);
-  const dstDefault = join(paths.chromeProfile, "Default");
-  if (!existsSync(srcProfile) || !existsSync(dstDefault)) return;
-
-  for (const f of AUTH_FILES) {
-    const src = join(srcProfile, f);
-    const dst = join(dstDefault, f);
-    if (existsSync(src)) cpSync(src, dst);
-    else rmSync(dst, { force: true }); // if the real one no longer has the sidecar, don't keep the old
-  }
-  for (const d of AUTH_DIRS) {
-    const src = join(srcProfile, d);
-    if (!existsSync(src)) continue;
-    const dst = join(dstDefault, d);
-    rmSync(dst, { recursive: true, force: true }); // avoids mixing old/new leveldb
-    cpSync(src, dst, { recursive: true, filter: (p) => !CACHE_DIRS.has(basename(p)) });
-  }
-  // Run AFTER the loops above (so Default/Network/ already exists): overwrite the raw-copied auth
-  // DBs with a consistent online backup. On failure the raw cpSync copy stands (fallback). The
-  // AUTH_FILES loop already handled removal of a stale dst when the source base disappeared, so we
-  // only act when the source exists here (no competing rmSync). LevelDB stores stay raw-copied.
-  for (const rel of authDbRelPaths(srcProfile)) {
-    const src = join(srcProfile, rel);
-    if (!existsSync(src)) continue;
-    const dst = join(dstDefault, rel);
-    mkdirSync(dirname(dst), { recursive: true });
-    sqliteBackup(src, dst);
-  }
-  const localState = join(srcRoot, "Local State");
-  if (existsSync(localState)) {
-    cpSync(localState, join(paths.chromeProfile, "Local State")); // encryption consistency
-  }
-  disableSessionRestore();
-  process.stderr.write(
-    `[tool-memory] Auth re-seeded (profile "${profile}") from ${srcRoot}.\n`,
-  );
-}
-
-/**
- * Leaves the profile ready to start WITHOUT restoring the user's old tabs: deletes the
- * session files and forces "open new tab" + clean exit in the preferences. Keeps the data
- * (cookies/login); it only avoids the tab noise.
+ * Leaves the profile ready to start WITHOUT restoring last run's tabs and without the
+ * "Chrome didn't shut down properly" bubble: deletes the session/tab files and forces
+ * "open new tab" + clean exit in the preferences. Keeps the data (cookies/login); it only
+ * removes the tab noise. No-op the first time (there's no Default/Preferences yet).
  */
 function disableSessionRestore(): void {
   const def = join(paths.chromeProfile, "Default");
@@ -225,14 +97,12 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
     return { cdpEndpoint, reused: true };
   }
 
-  // First time: we seed the profile with the accounts from the user's real Chrome.
-  seedProfileIfEmpty();
-  // Each launch (once per session, lazy): we refresh auth if enabled.
-  if (reseedEnabled) reseedAuth();
-
   mkdirSync(paths.chromeProfile, { recursive: true });
+  // Reuse the persistent dedicated profile as-is; only strip the tab-restore noise.
+  disableSessionRestore();
 
-  const bin = resolveChromeBinary();
+  // System Google Chrome if present, else Playwright's bundled chromium.
+  const exe = resolveChromeBinary() ?? chromium.executablePath();
   const args = [
     `--remote-debugging-port=${cdpPort}`,
     `--user-data-dir=${paths.chromeProfile}`,
@@ -242,22 +112,49 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
     "about:blank",
   ];
 
-  if (bin) {
-    child = spawn(bin, args, { stdio: "ignore", detached: false });
+  const appBundle = process.platform === "darwin" ? macAppBundle(exe) : undefined;
+  if (appBundle) {
+    // macOS: launch in the BACKGROUND so the window never steals focus. `open -g` keeps
+    // Chrome from coming to the foreground; `-n` forces a fresh instance bound to OUR
+    // dedicated profile (it doesn't attach to the user's running Chrome). `open` returns
+    // right away and the Chrome it starts is detached from us, so we can't keep a child
+    // handle: we remember we launched it and kill it by its CDP port on stop.
+    spawn("open", ["-g", "-n", "-a", appBundle, "--args", ...args], { stdio: "ignore" });
+    launchedInBackground = true;
   } else {
-    // No system Chrome: we use Playwright's chromium as the binary.
-    child = spawn(chromium.executablePath(), args, {
-      stdio: "ignore",
-      detached: false,
+    // Linux/Windows (or a binary not inside a .app bundle): spawn it directly and keep the
+    // child handle to kill it on stop.
+    child = spawn(exe, args, { stdio: "ignore", detached: false });
+    child.on("exit", () => {
+      child = undefined;
     });
   }
 
-  child.on("exit", () => {
-    child = undefined;
-  });
-
   await waitForCdp();
   return { cdpEndpoint, reused: false };
+}
+
+/**
+ * Kills the Chrome WE launched in the background via `open` (so we have no child handle):
+ * find the process LISTENING on our CDP port and kill it. `-sTCP:LISTEN` matches only the
+ * Chrome browser process, never our own CDP websocket clients (which are ESTABLISHED), and
+ * the port is dedicated to us, so this never touches the user's real Chrome. Best-effort.
+ */
+function killChromeOnCdpPort(): void {
+  try {
+    const out = execFileSync("lsof", ["-ti", `tcp:${cdpPort}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+    }).trim();
+    for (const pid of out.split(/\s+/).filter(Boolean)) {
+      try {
+        process.kill(Number(pid));
+      } catch {
+        /* already gone */
+      }
+    }
+  } catch {
+    /* lsof missing or nothing listening: best-effort */
+  }
 }
 
 /** Closes Chrome only if we launched it ourselves. */
@@ -265,5 +162,8 @@ export function stopSharedChrome(): void {
   if (child && !child.killed) {
     child.kill();
     child = undefined;
+  } else if (launchedInBackground) {
+    killChromeOnCdpPort();
   }
+  launchedInBackground = false;
 }

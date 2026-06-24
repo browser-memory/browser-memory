@@ -22,7 +22,7 @@ function fresh(): void {
   resetConfig();
   clearConfigCache();
   delete process.env.TOOL_MEMORY_REGISTRY_URL;
-  delete process.env.TOOL_MEMORY_RESEED;
+  delete process.env.TOOL_MEMORY_CDP_PORT;
 }
 
 test("set persists to the file and cfg reads it", () => {
@@ -99,11 +99,11 @@ test("the CLI exposes home, registry-url and registry-enabled", () => {
 test("effectiveConfig reports the source of each value", () => {
   fresh();
   setSetting("registry-url", "https://file.com");
-  process.env.TOOL_MEMORY_RESEED = "off";
+  process.env.TOOL_MEMORY_CDP_PORT = "9999";
   const rows = effectiveConfig();
   const byKey = Object.fromEntries(rows.map((r) => [r.key, r]));
   assert.equal(byKey["registry-url"].source, "config");
-  assert.equal(byKey["reseed"].source, "env");
+  assert.equal(byKey["cdp-port"].source, "env");
   assert.equal(byKey["registry-timeout-ms"].source, "default");
-  delete process.env.TOOL_MEMORY_RESEED;
+  delete process.env.TOOL_MEMORY_CDP_PORT;
 });

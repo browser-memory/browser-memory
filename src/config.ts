@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { existsSync, readFileSync } from "node:fs";
-import { cfg, truthy } from "./settings.js";
+import { existsSync } from "node:fs";
+import { cfg } from "./settings.js";
 
 /**
  * Global paths and system parameters.
@@ -32,15 +32,6 @@ export const paths = {
 /** Remote-debugging port of the shared Chrome. */
 export const cdpPort = Number(cfg("TOOL_MEMORY_CDP_PORT") ?? 9333);
 
-/**
- * Every time Chrome is LAUNCHED (once per session, lazy) we refresh the session files
- * (cookies/login/storage) from the user's real Chrome. This way you carry over
- * new logins without re-copying the whole profile. On by default so any user
- * brings up their browser with up-to-date sessions without configuring anything; turn it off with
- * TOOL_MEMORY_RESEED=0. For 100% fresh cookies it's best to have the real Chrome closed.
- */
-export const reseedEnabled = truthy(cfg("TOOL_MEMORY_RESEED"), true);
-
 /** CDP endpoint of the dedicated Chrome; the replay runner and exploration tools attach to it. */
 export const cdpEndpoint = `http://127.0.0.1:${cdpPort}`;
 
@@ -50,9 +41,10 @@ function firstExisting(candidates: string[]): string | undefined {
 }
 
 /**
- * Chrome binary to launch, by platform. We prefer the system Google Chrome
- * (the user's real profile for manual auth the first time); if absent, we fall back to the
- * chromium bundled with Playwright. Override with TOOL_MEMORY_CHROME_BIN.
+ * Chrome binary to launch, by platform. We prefer the system Google Chrome (more like a real
+ * browser, less bot detection); if absent, we fall back to the chromium bundled with Playwright.
+ * Either way it runs against our DEDICATED profile, never the user's real one. Override with
+ * TOOL_MEMORY_CHROME_BIN.
  */
 export function resolveChromeBinary(): string | undefined {
   const override = cfg("TOOL_MEMORY_CHROME_BIN");
@@ -87,60 +79,4 @@ export function resolveChromeBinary(): string | undefined {
   }
   // undefined => let Playwright use its bundled chromium.
   return firstExisting(candidates);
-}
-
-/**
- * The REAL user-data-dir of the user's Chrome (where their logged-in accounts live), by
- * platform. It's the source of the "seed": we copy the active profile here to start with
- * sessions already signed in, without touching the real dir (Chrome 136+ blocks CDP on the
- * user-data-dir by default, which is why we use a copy in our own dir).
- * Override with TOOL_MEMORY_SEED_FROM. Returns undefined if not found.
- */
-export function realChromeUserDataDir(): string | undefined {
-  const override = cfg("TOOL_MEMORY_SEED_FROM");
-  if (override) return override;
-  const home = homedir();
-  let candidates: string[] = [];
-  if (process.platform === "darwin") {
-    candidates = [
-      join(home, "Library", "Application Support", "Google", "Chrome"),
-      join(home, "Library", "Application Support", "Chromium"),
-    ];
-  } else if (process.platform === "win32") {
-    const local = process.env["LOCALAPPDATA"] ?? join(home, "AppData", "Local");
-    candidates = [
-      join(local, "Google", "Chrome", "User Data"),
-      join(local, "Chromium", "User Data"),
-    ];
-  } else {
-    candidates = [
-      join(home, ".config", "google-chrome"),
-      join(home, ".config", "chromium"),
-    ];
-  }
-  // Works if it has ANY profile inside (Local State lists the real profiles).
-  return candidates.find((root) => existsSync(join(root, "Local State")));
-}
-
-/**
- * Name of the profile directory to seed (e.g. "Default", "Profile 2"). Auto-detects
- * the MOST used one by reading `Local State` (`profile.last_used`), so a user with several
- * profiles starts with the one they actually use, without configuring anything. Falls back to "Default" if there's
- * no info. Explicit override with TOOL_MEMORY_PROFILE.
- */
-export function resolveSeedProfile(srcRoot: string): string {
-  const override = cfg("TOOL_MEMORY_PROFILE");
-  if (override && existsSync(join(srcRoot, override))) return override;
-  try {
-    const localState = JSON.parse(
-      readFileSync(join(srcRoot, "Local State"), "utf8"),
-    ) as { profile?: { last_used?: string; last_active_profiles?: string[] } };
-    const candidate =
-      localState.profile?.last_used ??
-      localState.profile?.last_active_profiles?.[0];
-    if (candidate && existsSync(join(srcRoot, candidate))) return candidate;
-  } catch {
-    // Local State absent/unreadable: we fall back to Default.
-  }
-  return "Default";
 }
