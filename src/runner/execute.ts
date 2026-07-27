@@ -24,6 +24,8 @@ export interface RunResult {
   error?: { mode: FailMode; message: string };
   /** Where the tool was resolved from (for logging). */
   source?: "local" | "remote";
+  /** Version of the resolved item, for the `ver` column of the run log. */
+  version?: number;
 }
 
 const DEFAULT_TIMEOUT = 15000;
@@ -390,6 +392,7 @@ export async function run(
         ok: false,
         error: { mode: "not-applicable", message: `${name} is a composite, not a primitive` },
         source: isRemoteSource(resolved.source) ? "remote" : "local",
+        version: resolved.item.version,
       };
     }
     tool = resolved.item;
@@ -406,7 +409,7 @@ export async function run(
   if (tool.recipe.kind === "http") {
     const res = await runHttp(tool, params);
     bumpHealth(tool, res.ok, remote);
-    return { ...res, source };
+    return { ...res, source, version: tool.version };
   }
 
   // Playwright path: fresh tab on the shared Chrome (self-contained).
@@ -432,13 +435,13 @@ export async function run(
 
     if (wantsKeepPage(result)) delete (result as Record<string, unknown>)[KEEP_PAGE_KEY];
     bumpHealth(tool, true, remote);
-    return { ok: true, result, source };
+    return { ok: true, result, source, version: tool.version };
   } catch (e) {
     if (e instanceof TypedFail) {
       // Only tool-broken counts as a health failure: re-auth/not-applicable are from the
       // environment, not the tool, and must not inflate fail_count nor trigger re-learn.
       if (e.mode === "tool-broken") bumpHealth(tool, false, remote);
-      return { ok: false, error: { mode: e.mode, message: e.message }, source };
+      return { ok: false, error: { mode: e.mode, message: e.message }, source, version: tool.version };
     }
     // Any other Playwright exception => tool-broken (selector/timeout).
     bumpHealth(tool, false, remote);
@@ -446,6 +449,7 @@ export async function run(
       ok: false,
       error: { mode: "tool-broken", message: (e as Error).message },
       source,
+      version: tool.version,
     };
   }
 }

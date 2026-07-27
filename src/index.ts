@@ -33,7 +33,8 @@ import {
   RegistryRateLimitError,
 } from "./registry/client.js";
 import { resolveItem, isRemoteSource, type Resolved } from "./registry/resolve.js";
-import { logEvent } from "./registry/log.js";
+import { logEvent, formatMsg } from "./registry/log.js";
+import { newRunId } from "./registry/run-id.js";
 import {
   attemptDeviceLogin,
   type DeviceLoginOutcome,
@@ -355,32 +356,45 @@ server.tool(
     // fall to disk without throwing): 401 → login + retry; 429 → bail out with notice.
     let composite = false;
     let source: "local" | "remote" = "local";
+    let version: number | undefined;
     try {
       const gate = await resolveWithGate(name);
       if (gate.notice) return gateResult(gate.notice); // login pending / limit: we don't run.
       if (gate.resolved) {
         composite = isComposite(gate.resolved.item);
         source = isRemoteSource(gate.resolved.source) ? "remote" : "local";
+        version = gate.resolved.item.version;
       }
     } catch {
       // doesn't exist anywhere; run()/runComposite() report it as not-applicable.
     }
+    // One correlation id for the whole call: a composite shares it with every step of
+    // its chain, so the `runs` table can reconstruct the chain by grouping on run_id.
+    const runId = newRunId();
+    const started = Date.now();
     const res = composite
-      ? await runComposite(name, params ?? {})
+      ? await runComposite(name, params ?? {}, runId)
       : await run(name, params ?? {});
+    const ms = Date.now() - started;
 
     // tool_run: ONE event per top-level call (a composite = 1 here; its steps are
-    // logged by compose.ts as tool_step).
+    // logged by compose.ts as tool_step, sharing this run_id).
     logEvent({
       event_type: "tool_run",
+      run_id: runId,
+      runtime: "browser",
       tool_name: name,
+      ver: !composite ? ((res as RunResult).version ?? version) : version,
       item_type: composite ? "composite" : "primitive",
       source: !composite && (res as RunResult).source ? (res as RunResult).source! : source,
-      outcome: res.ok ? "ok" : "error",
-      fail_mode: composite
-        ? (res as ComposeResult).steps.find((s) => !s.ok)?.error?.mode
-        : (res as RunResult).error?.mode,
+      phase: res.ok ? "ok" : "fail",
+      msg: formatMsg(
+        composite
+          ? (res as ComposeResult).steps.find((s) => !s.ok)?.error
+          : (res as RunResult).error,
+      ),
       param_keys: Object.keys(params ?? {}),
+      ms,
     });
 
     return {

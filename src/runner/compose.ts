@@ -1,6 +1,7 @@
 import { run, injectParams, type RunResult } from "./execute.js";
 import { resolveItem } from "../registry/resolve.js";
-import { logEvent } from "../registry/log.js";
+import { logEvent, formatMsg } from "../registry/log.js";
+import { newRunId } from "../registry/run-id.js";
 import { isComposite } from "../schema/tool.js";
 import type { ChainStep, Composite } from "../schema/tool.js";
 
@@ -57,6 +58,8 @@ function resolveInputs(
 export async function runComposite(
   name: string,
   params: Record<string, unknown> = {},
+  /** Correlation id of the top-level call, shared by every step (see registry/run-id.ts). */
+  runId: string = newRunId(),
 ): Promise<ComposeResult> {
   const handles: Record<string, unknown> = { ...params };
   const steps: ComposeStepResult[] = [];
@@ -99,17 +102,22 @@ export async function runComposite(
       return { ok: false, steps, handles, aborted_at: { index: i, tool: link.tool } };
     }
 
+    const startedStep = Date.now();
     const res = await run(link.tool, inputs);
     // One event per chain step (requested granularity): measures which primitive fails.
     logEvent({
       event_type: "tool_step",
+      run_id: runId,
+      runtime: "browser",
       tool_name: link.tool,
       parent_name: name,
       step_index: i,
+      ver: res.version,
       source: res.source ?? "local",
-      outcome: res.ok ? "ok" : "error",
-      fail_mode: res.error?.mode,
+      phase: res.ok ? "ok" : "fail",
+      msg: formatMsg(res.error),
       param_keys: Object.keys(inputs),
+      ms: Date.now() - startedStep,
     });
     if (!res.ok) {
       // Precondition or execution failed: we abort the chain reporting where.
