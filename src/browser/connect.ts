@@ -76,15 +76,27 @@ export async function captureScreenshotsInto(dir: string): Promise<string[]> {
   return out;
 }
 
-/** Each run uses a fresh tab and closes it when done (self-contained tools). */
-export async function withFreshPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
+/**
+ * Each run uses a fresh tab and closes it when done (self-contained tools).
+ * Exception: if `keepIf(result)` returns true, the tab is left open and brought to the
+ * front — for MANUAL_CONFIRM flows where the tool prepares a write and a human must
+ * review the final screen and confirm it by hand in the visible browser.
+ */
+export async function withFreshPage<T>(
+  fn: (page: Page) => Promise<T>,
+  keepIf?: (result: T) => boolean,
+): Promise<T> {
   const b = await getBrowser();
   const context = b.contexts()[0] ?? (await b.newContext());
   const page = await context.newPage();
+  let keep = false;
   try {
-    return await fn(page);
+    const result = await fn(page);
+    keep = keepIf ? keepIf(result) : false;
+    if (keep) await page.bringToFront().catch(() => {});
+    return result;
   } finally {
-    await page.close().catch(() => {});
+    if (!keep) await page.close().catch(() => {});
   }
 }
 

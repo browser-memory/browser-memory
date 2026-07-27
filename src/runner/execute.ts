@@ -347,6 +347,22 @@ async function runHttp(
 // --- entrypoint ------------------------------------------------------------------
 
 /**
+ * Reserved marker an extractor may set on its result to ask the runner to LEAVE the
+ * run's tab open (and focused) instead of closing it. Meant for MANUAL_CONFIRM flows:
+ * the tool prepares a write, navigates the tab to the final review screen, and the
+ * human confirms by hand. The marker is stripped from the result returned to the agent.
+ */
+const KEEP_PAGE_KEY = "_keep_page";
+
+function wantsKeepPage(data: unknown): boolean {
+  return (
+    typeof data === "object" &&
+    data !== null &&
+    (data as Record<string, unknown>)[KEEP_PAGE_KEY] === true
+  );
+}
+
+/**
  * Persists the tool's health. NO-OP for remote tools: Option A keeps them ephemeral
  * (they must not create the local file under tools/); their health is inferred
  * server-side from `tool_run` events.
@@ -412,8 +428,9 @@ export async function run(
         ? await extractDom(page, tool.result_extractor, params)
         : { ok: true };
       return data;
-    });
+    }, wantsKeepPage);
 
+    if (wantsKeepPage(result)) delete (result as Record<string, unknown>)[KEEP_PAGE_KEY];
     bumpHealth(tool, true, remote);
     return { ok: true, result, source };
   } catch (e) {
