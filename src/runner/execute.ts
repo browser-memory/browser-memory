@@ -1,10 +1,12 @@
 import type { Page } from "playwright";
-import { withFreshPage } from "../browser/connect.js";
-import { saveTool } from "../memory/store.js";
+import { withOriginPage } from "../browser/connect.js";
+import { originOf } from "../browser/worker-tabs.js";
+import { saveItem } from "../memory/store.js";
 import { isComposite } from "../schema/tool.js";
 import { resolveItem, isRemoteSource } from "../registry/resolve.js";
 import type {
   Tool,
+  MemoryItem,
   PlaywrightStep,
   SuccessAssertion,
   ResultExtractor,
@@ -21,7 +23,13 @@ export type FailMode = "re-auth" | "not-applicable" | "tool-broken";
 export interface RunResult {
   ok: boolean;
   result?: unknown;
-  error?: { mode: FailMode; message: string };
+  /**
+   * `retryable` marks a failure the USER can clear without any change to the tool —
+   * today only `re-auth`: the tab was left open on the login screen and brought to the
+   * front, so once the human logs in the very same call works. It tells the agent to
+   * ask and retry instead of reporting a dead end or re-learning a healthy tool.
+   */
+  error?: { mode: FailMode; message: string; retryable?: boolean };
   /** Where the tool was resolved from (for logging). */
   source?: "local" | "remote";
   /** Version of the resolved item, for the `ver` column of the run log. */
@@ -330,7 +338,10 @@ async function runHttp(
   const res = await fetch(url, { method: r.method, headers, body });
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) {
-      return { ok: false, error: { mode: "re-auth", message: `HTTP ${res.status}` } };
+      return {
+        ok: false,
+        error: { mode: "re-auth", message: `HTTP ${res.status}`, retryable: true },
+      };
     }
     return { ok: false, error: { mode: "tool-broken", message: `HTTP ${res.status}` } };
   }
@@ -346,36 +357,156 @@ async function runHttp(
   return { ok: true, result };
 }
 
-// --- entrypoint ------------------------------------------------------------------
+// --- fetch-replay path -----------------------------------------------------------
 
-/**
- * Reserved marker an extractor may set on its result to ask the runner to LEAVE the
- * run's tab open (and focused) instead of closing it. Meant for MANUAL_CONFIRM flows:
- * the tool prepares a write, navigates the tab to the final review screen, and the
- * human confirms by hand. The marker is stripped from the result returned to the agent.
- */
-const KEEP_PAGE_KEY = "_keep_page";
-
-function wantsKeepPage(data: unknown): boolean {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    (data as Record<string, unknown>)[KEEP_PAGE_KEY] === true
-  );
+/** "x.com" → "https://x.com". Leaves a full URL alone. */
+function siteOrigin(site: string | undefined): string | undefined {
+  if (!site) return undefined;
+  return originOf(/^[a-z]+:\/\//i.test(site) ? site : `https://${site}`);
 }
 
 /**
- * Persists the tool's health. NO-OP for remote tools: Option A keeps them ephemeral
- * (they must not create the local file under tools/); their health is inferred
- * server-side from `tool_run` events.
+ * The origin this run works against — it selects the worker tab the run reuses.
+ * Read from the first `navigate` of the recipe (the real entry point) and falling back
+ * to the declared `site`. It only has to be *stable*, not exact: a wrong guess costs an
+ * extra tab, never a wrong page, because the recipe navigates where it wants anyway.
  */
-function bumpHealth(tool: Tool, ok: boolean, remote: boolean): void {
+export function toolOrigin(
+  tool: Tool,
+  params: Record<string, unknown>,
+): string | undefined {
+  if (tool.recipe.kind === "fetch-replay") {
+    try {
+      return originOf(injectParams(tool.recipe.origin, params)) ?? siteOrigin(tool.site);
+    } catch {
+      return siteOrigin(tool.site);
+    }
+  }
+  if (tool.recipe.kind === "playwright") {
+    for (const step of tool.recipe.steps) {
+      if (step.action !== "navigate" || !step.url) continue;
+      try {
+        return originOf(injectParams(step.url, params)) ?? siteOrigin(tool.site);
+      } catch {
+        break; // a missing param: the step itself will report it
+      }
+    }
+  }
+  return siteOrigin(tool.site);
+}
+
+/**
+ * Whether the worker tab has to be blanked before this run — the entry-side isolation
+ * that replaced closing the tab on exit.
+ *
+ * Only a `playwright` recipe whose first executable step is NOT a navigation needs it:
+ * it would otherwise click or type on whatever the previous run left on that tab. One
+ * that starts with `navigate` resets by itself (a `goto` tears the document down), and
+ * a `fetch-replay` must NEVER be blanked — reusing the live page already sitting on
+ * that origin is precisely what makes it cheap.
+ */
+export function needsBlankReset(
+  tool: Tool,
+  params: Record<string, unknown>,
+): boolean {
+  if (tool.recipe.kind !== "playwright") return false;
+  for (const step of tool.recipe.steps) {
+    if (skipOptionalStep(step, params)) continue;
+    return step.action !== "navigate";
+  }
+  return false;
+}
+
+/**
+ * Replays the call from inside the tab. Navigates ONLY when the worker tab isn't on the
+ * site already — which is the whole point of keeping one tab per origin: the common
+ * case is a single `evaluate`, no page load, and the session travels with the request
+ * because it is same-origin (what `kind: "http"` cannot do from Node).
+ */
+async function runFetchReplay(
+  tool: Tool,
+  params: Record<string, unknown>,
+  page: Page,
+): Promise<unknown> {
+  if (tool.recipe.kind !== "fetch-replay") throw new Error("recipe is not fetch-replay");
+  const r = tool.recipe;
+  const want = originOf(injectParams(r.origin, params));
+  if (!want || originOf(page.url()) !== want) {
+    const target = injectParams(r.url ?? r.origin, params);
+    await page.goto(target, { waitUntil: "domcontentloaded", timeout: DEFAULT_TIMEOUT });
+    if (looksLikeLogin(page.url())) {
+      throw new TypedFail("re-auth", `session required at ${page.url()}`);
+    }
+  }
+  const paramsLiteral = JSON.stringify(params ?? {});
+  return page.evaluate(`(${r.fn})(${paramsLiteral})`);
+}
+
+/**
+ * On a session failure, leaves the user one step from fixing it: the tab is already
+ * sitting on the login screen (runs don't close their tab any more), so we bring it to
+ * the front and say so. The very same call works once they log in — hence `retryable`:
+ * the agent should ask and retry, never re-learn a tool that isn't broken.
+ */
+async function assistReAuth(page: Page, e: unknown): Promise<unknown> {
+  if (!(e instanceof TypedFail) || e.mode !== "re-auth") return e;
+  let url = "";
+  try {
+    url = page.url();
+  } catch {
+    /* the page may be gone: the message degrades, the mode doesn't */
+  }
+  await page.bringToFront().catch(() => {});
+  return new TypedFail(
+    "re-auth",
+    `${e.message}. I left the tab open and focused${url ? ` on ${url}` : ""}: log in ` +
+      `by hand there and ask me for the same thing again — the tool is fine, don't re-learn it.`,
+  );
+}
+
+// --- entrypoint ------------------------------------------------------------------
+
+/**
+ * Reserved markers an extractor may set on its result to ask the runner to bring the
+ * run's tab to the FRONT. Meant for MANUAL_CONFIRM flows: the tool prepares a write,
+ * navigates the tab to the final review screen, and the human confirms by hand.
+ *
+ * `_keep_page` used to mean "don't close this tab (and focus it)". Keeping the tab is
+ * now what every run does (browser/worker-tabs.ts), so only the focus half is still a
+ * decision and that is all the marker does today. The old name keeps working — tools
+ * saved with it are in the wild — and `_focus_page` is the name that says what happens.
+ * Both are stripped from the result handed back to the agent.
+ */
+const FOCUS_PAGE_KEYS = ["_focus_page", "_keep_page"] as const;
+
+export function wantsFocus(data: unknown): boolean {
+  if (typeof data !== "object" || data === null) return false;
+  const rec = data as Record<string, unknown>;
+  return FOCUS_PAGE_KEYS.some((k) => rec[k] === true);
+}
+
+/** Removes the focus markers so they never reach the agent as if they were data. */
+function stripFocusMarkers(data: unknown): void {
+  if (typeof data !== "object" || data === null) return;
+  for (const k of FOCUS_PAGE_KEYS) delete (data as Record<string, unknown>)[k];
+}
+
+/**
+ * Persists the item's health. Takes any MemoryItem, not just a Tool, because the
+ * composite runner records its own health through here too (compose.ts): otherwise a
+ * composite would keep `last_ok: null` forever no matter how often it ran, since only
+ * the primitives it dispatches to went through this path.
+ *
+ * NO-OP for remote items: Option A keeps them ephemeral (they must not create the local
+ * file under tools/); their health is inferred server-side from `tool_run` events.
+ */
+export function bumpHealth(item: MemoryItem, ok: boolean, remote: boolean): void {
   if (remote) return;
   const nowIso = new Date().toISOString();
   const health = ok
     ? { last_ok: nowIso, fail_count: 0 }
-    : { last_ok: tool.health.last_ok, fail_count: tool.health.fail_count + 1 };
-  saveTool({ ...tool, health });
+    : { last_ok: item.health.last_ok, fail_count: item.health.fail_count + 1 };
+  saveItem({ ...item, health });
 }
 
 export async function run(
@@ -412,28 +543,65 @@ export async function run(
     return { ...res, source, version: tool.version };
   }
 
-  // Playwright path: fresh tab on the shared Chrome (self-contained).
+  // Browser path: the worker tab of this origin, reused across runs and LEFT OPEN so
+  // the user can keep working on what the tool produced (browser/worker-tabs.ts).
+  const recipe = tool.recipe;
   try {
-    const result = await withFreshPage(async (page) => {
-      for (const step of tool.recipe.kind === "playwright" ? tool.recipe.steps : []) {
-        if (skipOptionalStep(step, params)) continue;
-        await runPlaywrightStep(page, step, params);
-      }
+    const result = await withOriginPage(
+      toolOrigin(tool, params),
+      async (page) => {
+        try {
+          if (recipe.kind === "fetch-replay") {
+            const data = await runFetchReplay(tool, params, page);
+            // The fn already returns the data; a json extractor only narrows it.
+            const narrowed =
+              tool.result_extractor?.type === "json"
+                ? getJsonPath(data, tool.result_extractor.jsonPath)
+                : data;
+            // The postcondition of a fetch is the payload itself: an assertion over the
+            // DOM would be checking a page nobody looked at.
+            if (narrowed === undefined || narrowed === null) {
+              throw new TypedFail(
+                "tool-broken",
+                `success_assertion failed: the in-page fetch returned no data`,
+              );
+            }
+            if (tool.success_assertion.type === "json") {
+              const at = getJsonPath(narrowed, tool.success_assertion.jsonPath);
+              if (at === undefined || at === null) {
+                throw new TypedFail(
+                  "tool-broken",
+                  `success_assertion failed: empty jsonPath \`${tool.success_assertion.jsonPath}\` in the fetched data`,
+                );
+              }
+            }
+            return narrowed;
+          }
 
-      // success_assertion (mandatory postcondition).
-      const check = await checkAssertion(page, tool.success_assertion);
-      if (!check.ok) {
-        throw new TypedFail("tool-broken", `success_assertion failed: ${check.detail}`);
-      }
+          for (const step of recipe.kind === "playwright" ? recipe.steps : []) {
+            if (skipOptionalStep(step, params)) continue;
+            await runPlaywrightStep(page, step, params);
+          }
 
-      // result_extractor for read tools.
-      const data = tool.result_extractor
-        ? await extractDom(page, tool.result_extractor, params)
-        : { ok: true };
-      return data;
-    }, wantsKeepPage);
+          // success_assertion (mandatory postcondition).
+          const check = await checkAssertion(page, tool.success_assertion);
+          if (!check.ok) {
+            throw new TypedFail("tool-broken", `success_assertion failed: ${check.detail}`);
+          }
 
-    if (wantsKeepPage(result)) delete (result as Record<string, unknown>)[KEEP_PAGE_KEY];
+          // result_extractor for read tools.
+          const data = tool.result_extractor
+            ? await extractDom(page, tool.result_extractor, params)
+            : { ok: true };
+          return data;
+        } catch (e) {
+          throw await assistReAuth(page, e);
+        }
+      },
+      { reset: needsBlankReset(tool, params), focus: wantsFocus },
+    );
+
+    stripFocusMarkers(result);
     bumpHealth(tool, true, remote);
     return { ok: true, result, source, version: tool.version };
   } catch (e) {
@@ -441,7 +609,12 @@ export async function run(
       // Only tool-broken counts as a health failure: re-auth/not-applicable are from the
       // environment, not the tool, and must not inflate fail_count nor trigger re-learn.
       if (e.mode === "tool-broken") bumpHealth(tool, false, remote);
-      return { ok: false, error: { mode: e.mode, message: e.message }, source, version: tool.version };
+      return {
+        ok: false,
+        error: { mode: e.mode, message: e.message, retryable: e.mode === "re-auth" },
+        source,
+        version: tool.version,
+      };
     }
     // Any other Playwright exception => tool-broken (selector/timeout).
     bumpHealth(tool, false, remote);

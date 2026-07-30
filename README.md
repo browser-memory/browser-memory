@@ -18,23 +18,29 @@
 
 ## Install
 
-Requires Node.js ≥ 20 and Chrome (uses your system Google Chrome if present, otherwise Playwright's Chromium).
+Requires **Node.js ≥ 20** and **Google Chrome** installed.
 
-One command configures any supported agent — **Codex, Cursor, VS Code (Copilot) and Claude Code**.
-
-Install for a host (`codex` · `cursor` · `vscode` · `claude`):
+One command configures every supported agent it finds on the machine — **Codex, Cursor, VS Code (Copilot) and Claude Code**:
 
 ```bash
-npx -y browser-memory install codex
+npx -y browser-memory install
 ```
 
-Undo (same host forms):
+Then **restart the app**: MCP servers are negotiated when the session starts, so a new chat isn't enough. It's idempotent (never overwrites an existing entry).
+
+To install into a single host, name it (`codex` · `cursor` · `vscode` · `claude`):
 
 ```bash
-npx -y browser-memory uninstall codex
+npx -y browser-memory install cursor
 ```
 
-It's idempotent (never overwrites an existing entry). Restart the app afterwards.
+## Disconnect
+
+```bash
+npx -y browser-memory uninstall
+```
+
+…and restart the app. This is the only way to remove it — an MCP server cannot unload itself from a live session. It takes the same optional host as `install`, and it only touches the host's config: your learned tools (`~/.tool-memory`) and the Chrome profile are left alone.
 
 **Any other MCP host** — drop this into its config (most clients use the `mcpServers` key; VS Code uses `servers`):
 
@@ -44,7 +50,15 @@ It's idempotent (never overwrites an existing entry). Restart the app afterwards
 
 ## Registry (optional)
 
-On by default — it pulls ready-made tools from the hosted registry (`https://api.browser-memory.com`).
+On by default — it pulls ready-made tools from the hosted registry (`https://api.browser-memory.com`), **anonymously**: no account, no sign-up, no login prompt. If the registry refuses the request, you're told once and everything keeps working with your local tools.
+
+Signing in is optional, and only if the backend asks for a key:
+
+```bash
+npx -y browser-memory login
+```
+
+(or set `TOOL_MEMORY_REGISTRY_KEY` yourself). The server never starts a login flow on its own.
 
 Turn it off to run 100% local:
 
@@ -63,3 +77,4 @@ Point it at another backend:
 ```bash
 npx browser-memory config set-url https://your-registry.example.com
 ```
+

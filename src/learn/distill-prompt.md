@@ -56,9 +56,28 @@ over the trace files.
     Look at the real shape in `resBody` to get it right.
   - Verify: mentally check that `url`+`headers`+`body` without the redacted cookies are enough
     to fetch `resBody`. If you depend on a per-session token that was redacted, it's NOT HTTP.
-- **Direct Playwright** if HTTP doesn't apply (`{ kind: "playwright", steps: [...] }`) with the
-  exact selectors from the narration. Default for writes and for endpoints that require per-session
-  tokens.
+- **fetch-replay** — the same endpoint, but called from INSIDE the tab. Use it whenever the
+  request is the right one but it only answers **with the session** (that is: HTTP above would
+  have worked except the endpoint needs the cookie). This is the common case on logged-in
+  sites, and it beats falling back to Playwright: the browser attaches the session by itself
+  because the call is same-origin, and the runner reuses the tab already open on that site, so
+  a replay is one `evaluate` with no page load.
+  ```json
+  { "kind": "fetch-replay", "origin": "https://www.site.com",
+    "url": "https://www.site.com/search",
+    "fn": "async (params) => { const r = await fetch(`/api/search?q=${encodeURIComponent(params.q)}`, { headers: { accept: 'application/json' } }); if (!r.ok) return null; const j = await r.json(); return j.results; }" }
+  ```
+  - `origin` ← the site's origin. `url` ← optional, the page to land on when the tab isn't on
+    the site yet (defaults to `origin`); pick one that is cheap and already authenticated.
+  - `fn` ← an **async** function called as `(params)` in the page. Same rules as an extractor:
+    read inputs from `params.<name>` (never as a free variable), no `eval`/`Function` (CSP),
+    and use **relative** URLs so the call stays same-origin. Return the data, or `null` on
+    failure. **Never** copy cookie/authorization headers into it — the browser adds them.
+  - The returned payload IS the postcondition: the runner fails the tool when it is
+    null/empty, so a `success_assertion` of `{ "type": "json", "jsonPath": "..." }` is the
+    natural one here (a dom assertion would be checking a page nobody looked at).
+- **Direct Playwright** if none of the above applies (`{ kind: "playwright", steps: [...] }`) with
+  the exact selectors from the narration. Default for writes and for anything UI-driven.
 
 ### 3. Parameterize
 Replace concrete inputs and handles with params: `search-person(name)`, not

@@ -16,6 +16,7 @@ import {
 } from "./install.js";
 import { rmSync, existsSync } from "node:fs";
 import { paths } from "./config.js";
+import { attemptDeviceLogin } from "./registry/device-auth.js";
 
 /**
  * Configuration CLI: `browser-memory config ...`. Dispatched BEFORE starting the MCP
@@ -48,7 +49,11 @@ With no arguments it starts the MCP server (stdio). Subcommands:
 
   install [host]              add this server to a host's MCP config
                                 host: codex | cursor | vscode | claude · omit = autodetect
-  uninstall [host]            remove it again (same hosts; omit = autodetect)
+  uninstall [host]            remove it again (same hosts; omit = autodetect).
+                                This is the ONLY way to disconnect the server: it can't
+                                unload itself from a live session. Restart the app after.
+  login                       sign in to the remote registry (OPTIONAL: it works
+                                anonymously; run this only if the backend asks for a key)
   reset-profile               delete the dedicated Chrome profile so the next
                                 launch starts empty (you log in again by hand)
   config show                 show the config and where each value comes from
@@ -135,7 +140,39 @@ function runInstall(action: "install" | "uninstall", host: string): void {
     for (const r of results) out(fmtResult(r));
     if (action === "install" && results.some((r) => r.status === "added"))
       out("  Restart the affected app(s) for the change to take effect.");
+    // The only way out is this same CLI: an MCP server can't unload itself from a live
+    // session, so we say it here, where the user is already looking.
+    if (action === "install" && results.some((r) => r.status === "added" || r.status === "already"))
+      out("  To disconnect it later: `npx -y browser-memory uninstall` (then restart the app).");
     if (results.some((r) => r.status === "error")) process.exitCode = 1;
+  } catch (e) {
+    err(`error: ${(e as Error).message}`);
+    process.exitCode = 1;
+  }
+}
+
+/**
+ * `login`: OPT-IN device-code login for the remote registry. The MCP server NEVER starts
+ * this on its own — it works anonymously and degrades to local tools if the backend
+ * refuses — so this command is the only way in. Non-blocking, in two calls: the first
+ * prints the link, and a second one (after authorizing in the browser) claims the key.
+ */
+async function runLogin(): Promise<void> {
+  try {
+    const outcome = await attemptDeviceLogin();
+    if (outcome.status === "authorized") {
+      out(`✓ Signed in with the remote registry (key saved in ${paths.auth}).`);
+      out("  Restart the MCP server for it to take effect.");
+      return;
+    }
+    if (outcome.status === "unavailable") {
+      err("error: the remote registry didn't respond. Check the connection or `config show`.");
+      process.exitCode = 1;
+      return;
+    }
+    const code = outcome.userCode ? ` (code ${outcome.userCode})` : "";
+    out(`Open ${outcome.verificationUrl} and authorize${code}.`);
+    out("Then run `browser-memory login` again to finish.");
   } catch (e) {
     err(`error: ${(e as Error).message}`);
     process.exitCode = 1;
@@ -166,7 +203,7 @@ function runResetProfile(): void {
 }
 
 /** Handles the CLI. Sets process.exitCode=1 on usage error. Never starts the server. */
-export function runCli(argv: string[]): void {
+export async function runCli(argv: string[]): Promise<void> {
   const [cmd, ...rest] = argv;
 
   if (cmd === "help" || cmd === "--help" || cmd === "-h") {
@@ -176,6 +213,11 @@ export function runCli(argv: string[]): void {
 
   if (cmd === "install" || cmd === "uninstall") {
     runInstall(cmd, (rest[0] ?? "").toLowerCase());
+    return;
+  }
+
+  if (cmd === "login") {
+    await runLogin();
     return;
   }
 

@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 process.env.TOOL_MEMORY_HOME = mkdtempSync(join(tmpdir(), "tm-compose-"));
+// Fully local: resolveItem must not reach for the remote registry when a tool is missing.
+process.env.TOOL_MEMORY_REGISTRY_ENABLED = "0";
 
 const { saveItem } = await import("../src/memory/store.ts");
 const { discover } = await import("../src/memory/discover.ts");
@@ -65,6 +67,63 @@ test("composite schema validates the chain", async () => {
     chain: [{ tool: "t", in: { a: "{{a}}" }, out: "h" }],
   });
   assert.equal(ok.chain[0].out, "h");
+});
+
+test("a composite records its own last_ok when the chain completes", async () => {
+  // Local http server so the chain really runs (no browser involved).
+  const { createServer } = await import("node:http");
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ x: "ok" }));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+  const { port } = server.address() as { port: number };
+  try {
+    saveItem(httpEcho("gamma-search", `http://127.0.0.1:${port}/{{x}}`));
+    saveItem({
+      name: "gamma-flow",
+      type: "composite",
+      site: "echo.test",
+      intent: "gamma flow",
+      keywords: ["gamma"],
+      params: { x: "string" },
+      chain: [{ tool: "gamma-search", in: { x: "{{x}}" } }],
+    });
+    const { runComposite } = await import("../src/runner/compose.ts");
+    const { loadComposite } = await import("../src/memory/store.ts");
+    assert.equal(loadComposite("gamma-flow").health.last_ok, null, "starts with no last_ok");
+
+    const r = await runComposite("gamma-flow", { x: "hi" });
+    assert.ok(r.ok, `the chain should have completed: ${JSON.stringify(r)}`);
+    // Regression: only the primitives used to go through bumpHealth, so a composite
+    // stayed at last_ok:null forever and could never be told apart from a never-run one.
+    assert.notEqual(loadComposite("gamma-flow").health.last_ok, null);
+  } finally {
+    server.close();
+  }
+});
+
+test("an env failure in the chain does not inflate the composite's fail_count", async () => {
+  saveItem({
+    name: "delta-flow",
+    type: "composite",
+    site: "echo.test",
+    intent: "delta flow",
+    keywords: ["delta"],
+    params: {},
+    chain: [{ tool: "does-not-exist", in: {} }],
+  });
+  const { runComposite } = await import("../src/runner/compose.ts");
+  const { loadComposite } = await import("../src/memory/store.ts");
+
+  const r = await runComposite("delta-flow", {});
+  assert.equal(r.ok, false);
+  assert.equal(r.steps[0].error?.mode, "not-applicable");
+  assert.equal(
+    loadComposite("delta-flow").health.fail_count,
+    0,
+    "re-auth/not-applicable come from the environment: they must not count against the tool",
+  );
 });
 
 test("extractHandle: an object with the key uses that field; a scalar uses the value", async () => {

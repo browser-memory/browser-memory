@@ -60,3 +60,63 @@ test("catches an unknown filter", () => {
   const problems = lintTool(tool);
   assert.ok(problems.some((p) => p.includes("unknown filter")), problems.join("; "));
 });
+
+// --- fetch-replay recipes --------------------------------------------------------
+
+test("fetch-replay: a param used only inside the fn counts as used", () => {
+  const tool = parseTool({
+    ...base,
+    recipe: {
+      kind: "fetch-replay",
+      origin: "https://s.com",
+      fn: "async (params) => (await fetch(`/api?q=${encodeURIComponent(params.q)}`)).json()",
+    },
+  });
+  assert.deepEqual(lintTool(tool), []);
+});
+
+test("fetch-replay: catches a bare param in the fn instead of params.q", () => {
+  const tool = parseTool({
+    ...base,
+    recipe: {
+      kind: "fetch-replay",
+      origin: "https://s.com",
+      fn: "async (params) => (await fetch(`/api?q=${q}`)).json()",
+    },
+  });
+  const problems = lintTool(tool);
+  assert.ok(
+    problems.some((p) => p.includes("'q' bare")),
+    problems.join("; "),
+  );
+});
+
+test("fetch-replay: catches a declared param nobody uses", () => {
+  const tool = parseTool({
+    ...base,
+    recipe: {
+      kind: "fetch-replay",
+      origin: "https://s.com",
+      fn: "async () => (await fetch('/api')).json()",
+    },
+  });
+  const problems = lintTool(tool);
+  assert.ok(
+    problems.some((p) => p.includes("'q'") && p.includes("isn't used")),
+    problems.join("; "),
+  );
+});
+
+test("fetch-replay: catches a single-brace placeholder in origin/url", () => {
+  const tool = parseTool({
+    ...base,
+    recipe: {
+      kind: "fetch-replay",
+      origin: "https://s.com",
+      url: "https://s.com/search?q={q}",
+      fn: "async (params) => params.q",
+    },
+  });
+  const problems = lintTool(tool);
+  assert.ok(problems.some((p) => p.includes("single-brace")), problems.join("; "));
+});

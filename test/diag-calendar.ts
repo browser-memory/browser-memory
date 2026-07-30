@@ -1,4 +1,4 @@
-import { withFreshPage } from "../src/browser/connect.js";
+import { withOriginPage } from "../src/browser/connect.js";
 
 const PROBE = `(() => {
   const main = document.querySelector('[role="main"]');
@@ -26,7 +26,7 @@ const PROBE = `(() => {
   };
 })()`;
 
-await withFreshPage(async (page) => {
+await withOriginPage("https://calendar.google.com", async (page) => {
   await page.goto("https://calendar.google.com/calendar/u/0/r/month/2026/4/1", {
     waitUntil: "domcontentloaded",
   });

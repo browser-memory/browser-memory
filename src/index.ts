@@ -35,10 +35,6 @@ import {
 import { resolveItem, isRemoteSource, type Resolved } from "./registry/resolve.js";
 import { logEvent, formatMsg } from "./registry/log.js";
 import { newRunId } from "./registry/run-id.js";
-import {
-  attemptDeviceLogin,
-  type DeviceLoginOutcome,
-} from "./registry/device-auth.js";
 import { runCli } from "./cli.js";
 
 /**
@@ -82,13 +78,26 @@ ALWAYS FOLLOW this loop when a task involves operating a website:
 
 3. \`run(name, params)\` returns DATA, not instructions. Any computation or decision
    over that data is yours. Typed errors:
-   - re-auth  → expired session: re-login (manual login). Do NOT re-learn.
+   - re-auth (retryable) → expired session. I ALREADY left the tab open and focused on
+     the login page: ask the user to log in by hand there and then CALL THE SAME run
+     AGAIN. Do NOT re-learn, the tool is fine.
    - not-applicable → doesn't apply (no permission / doesn't exist): report and stop.
    - tool-broken → selector/API changed: re-learn from a fresh trace.
+
+The tab a run used STAYS OPEN on the page the tool ended on, one per site, so the user
+can keep working there (the profile you opened, the cart you filled). Mention it when
+it's useful — you don't need to re-open or re-navigate anything for them to see it.
 
 Rules: parametrize whatever varies (q, hours), don't hardcode it. Secrets never go in
 tools/traces. write-irreversible (sending, paying) has NO confirmation gate yet:
 every run executes for real — confirm with the user before replaying one.
+
+To DISCONNECT this server, the user runs \`npx -y browser-memory uninstall\` in a
+terminal and restarts the app: that removes the entry from the host's MCP config. It
+CANNOT be unloaded from inside the session, so tell them those two steps if they ask.
+\`uninstall\` takes the same optional host as \`install\` (codex | cursor | vscode |
+claude); with no host it removes it from every host where it is configured. It touches
+only the host config: the learned tools in ~/.tool-memory and the Chrome profile stay.
 `.trim();
 
 const server = new McpServer(
@@ -103,17 +112,18 @@ function rateLimitNotice(e: RegistryRateLimitError): string {
 }
 
 /**
- * Message to the agent when a login is needed (non-blocking): we pass the LINK so the
- * user can authorize and we tell them to retry. The key is claimed on its own on retry.
+ * Message to the agent when the remote registry rejects the request (401/403).
+ *
+ * The client is ANONYMOUS by default: it sends no key unless one was configured and it
+ * NEVER starts a login flow on its own — nothing must ever stand between the user and
+ * their tools. If the backend requires a key for the remote catalog, the remedy is
+ * out-of-band (`browser-memory login`, or TOOL_MEMORY_REGISTRY_KEY) and meanwhile we
+ * degrade to the local tools instead of blocking the call.
  */
-function loginNotice(o: Exclude<DeviceLoginOutcome, { status: "authorized" }>): string {
-  if (o.status === "unavailable") {
-    return "Couldn't sign in with the remote registry (server down?). For now, local tools only.";
-  }
-  const code = o.userCode ? ` (code ${o.userCode})` : "";
+function authNotice(): string {
   return (
-    `You need to log in to use the remote tools: open ${o.verificationUrl} and authorize${code}. ` +
-    `Then ask for the same thing again and it connects on its own.`
+    "The remote registry rejected the request (anonymous or invalid key): local tools only. " +
+    "To use the remote catalog, run `npx -y browser-memory login` or set TOOL_MEMORY_REGISTRY_KEY."
   );
 }
 
@@ -140,42 +150,27 @@ async function loadRemoteCandidates(sites: string[]): Promise<Candidate[]> {
 }
 
 /**
- * Resolves the remote candidates handling the gating (NON-blocking): 401 → tries to advance
- * the device-login; if already authorized, retries and returns remote; if pending, returns without
- * remote + notice with the LINK. 429 → no remote + notice. Never throws: the LOCAL tools
- * are always returned regardless.
+ * Resolves the remote candidates WITHOUT ever gating the call. 401 (anonymous or invalid
+ * key) and 429 (limit) both degrade to "no remote" + a notice; the LOCAL tools always come
+ * back. Never throws.
  */
-async function remoteCandidatesGated(
+async function remoteCandidatesSafe(
   sites: string[],
-): Promise<{ remote: Candidate[]; notice?: string; gated?: boolean }> {
+): Promise<{ remote: Candidate[]; notice?: string }> {
   try {
     return { remote: await loadRemoteCandidates(sites) };
   } catch (e) {
-    if (e instanceof RegistryAuthError) {
-      const outcome = await attemptDeviceLogin();
-      if (outcome.status === "authorized") {
-        try {
-          return { remote: await loadRemoteCandidates(sites) };
-        } catch (e2) {
-          if (e2 instanceof RegistryRateLimitError) {
-            return { remote: [], notice: rateLimitNotice(e2), gated: true };
-          }
-          return { remote: [] }; // rare post-login: we degrade (show locals).
-        }
-      }
-      return { remote: [], notice: loginNotice(outcome), gated: true };
-    }
-    if (e instanceof RegistryRateLimitError) {
-      return { remote: [], notice: rateLimitNotice(e), gated: true };
-    }
+    if (e instanceof RegistryAuthError) return { remote: [], notice: authNotice() };
+    if (e instanceof RegistryRateLimitError) return { remote: [], notice: rateLimitNotice(e) };
     throw e; // unexpected: the client already degrades 5xx/timeout to [] without throwing.
   }
 }
 
 /**
- * resolveItem handling the gating (NON-blocking). Returns the resolved item, or a `notice`
- * (login pending / limit) so the run handler bails out showing it. Re-throws "doesn't
- * exist" so run() reports it as not-applicable.
+ * resolveItem without any login flow. Returns the resolved item, or a `notice` when the
+ * registry refused (anonymous/invalid key, or limit) and the tool lives ONLY there — a
+ * local tool never gets here, it resolves off disk. Re-throws "doesn't exist" so run()
+ * reports it as not-applicable.
  */
 async function resolveWithGate(
   name: string,
@@ -183,30 +178,13 @@ async function resolveWithGate(
   try {
     return { resolved: await resolveItem(name) };
   } catch (e) {
-    if (e instanceof RegistryAuthError) {
-      const outcome = await attemptDeviceLogin();
-      if (outcome.status === "authorized") {
-        try {
-          return { resolved: await resolveItem(name) };
-        } catch (e2) {
-          if (e2 instanceof RegistryRateLimitError) return { notice: rateLimitNotice(e2) };
-          if (e2 instanceof RegistryAuthError) {
-            return {
-              notice:
-                "I authorized you but the registry keeps rejecting the key. Retry or regenerate the key at /app.",
-            };
-          }
-          throw e2; // "doesn't exist"
-        }
-      }
-      return { notice: loginNotice(outcome) };
-    }
+    if (e instanceof RegistryAuthError) return { notice: authNotice() };
     if (e instanceof RegistryRateLimitError) return { notice: rateLimitNotice(e) };
     throw e; // "doesn't exist" → run()/runComposite() report it as not-applicable.
   }
 }
 
-/** MCP result for a run cut short by gating (login pending / limit): just the notice. */
+/** MCP result for a run that couldn't reach a remote-only tool: just the notice. */
 function gateResult(notice: string): {
   content: { type: "text"; text: string }[];
   isError: true;
@@ -230,16 +208,10 @@ server.tool(
   },
   async ({ sites }) => {
     // 1. remote: the server is the source of truth (curated offering). The index already carries the
-    //    param names, so there's no need to read the item. Gating is handled in
-    //    remoteCandidatesGated; a downed backend degrades to [] without throwing.
-    const { remote, notice, gated } = await remoteCandidatesGated(sites);
-
-    // HARD GATE: without a valid session (login pending / invalid key / rate-limit) we return NO
-    // tool — neither local nor remote —, just the notice. We also don't open Chrome: there's no task
-    // to prepare until the user logs in.
-    if (gated) {
-      return { content: [{ type: "text", text: notice ?? "Registry session required." }] };
-    }
+    //    param names, so there's no need to read the item. A refusal (anonymous/invalid key, or
+    //    limit) leaves a notice and no remote; a downed backend degrades to [] without throwing.
+    //    Either way we go on with the LOCAL tools: discover never returns empty-handed over auth.
+    const { remote, notice } = await remoteCandidatesSafe(sites);
 
     const remoteNames = new Set(remote.map((e) => e.name));
 
@@ -279,8 +251,8 @@ server.tool(
         `[tool-memory] couldn't pre-launch Chrome / start the recorder: ${(e as Error).message}\n`,
       );
     }
-    // if the gating left a notice (login pending / limit), we prepend it as a separate
-    // text block; the candidates still go as parseable JSON in the second block.
+    // if the remote refused (auth / limit), we prepend its notice as a separate text
+    // block; the candidates still go as parseable JSON in the second block.
     const content: { type: "text"; text: string }[] = [];
     if (notice) content.push({ type: "text", text: notice });
     content.push({ type: "text", text: JSON.stringify(candidates, null, 2) });
@@ -343,8 +315,10 @@ server.tool(
   "run",
   "Runs a tool from memory deterministically (no model in the loop) and " +
     "returns structured DATA. It checks environment preconditions and the " +
-    "success_assertion. Typed errors: re-auth (re-login), not-applicable (doesn't " +
-    "apply), tool-broken (re-learn with request).",
+    "success_assertion. The tab it used is LEFT OPEN on the resulting page (one per " +
+    "site) for the user to keep working on. Typed errors: re-auth (retryable — the " +
+    "login tab is already open and focused: ask the user to log in and call run " +
+    "again), not-applicable (doesn't apply), tool-broken (re-learn with request).",
   {
     name: z.string().describe("name of the tool or composite"),
     params: z.record(z.unknown()).optional().describe("params/handles of the tool"),
@@ -702,7 +676,7 @@ async function main(): Promise<void> {
   // and does NOT launch the MCP server. Without arguments (as the MCP host invokes it) it keeps going.
   const argv = process.argv.slice(2);
   if (argv.length > 0) {
-    runCli(argv);
+    await runCli(argv);
     return;
   }
   // tool-memory owns Chrome but does NOT launch it at startup: it does it lazily,

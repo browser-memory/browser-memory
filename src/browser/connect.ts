@@ -2,6 +2,15 @@ import { chromium, type Browser, type BrowserContext, type Page } from "playwrig
 import { join } from "node:path";
 import { cdpEndpoint } from "../config.js";
 import { launchSharedChrome } from "./chrome.js";
+import {
+  UNKNOWN_ORIGIN,
+  evictExcess,
+  getWorkerTab,
+  isWorkerPage,
+  resetWorkerTabs,
+  setWorkerTab,
+  workerTabs,
+} from "./worker-tabs.js";
 
 /**
  * Replay driver: it ATTACHES to the shared Chrome via CDP. It does not launch its own
@@ -58,7 +67,16 @@ export async function captureScreenshotsInto(dir: string): Promise<string[]> {
   const out: string[] = [];
   try {
     const ctx = await getSharedContext();
-    const pages = ctx.pages().filter((p) => !p.isClosed());
+    const live = ctx.pages().filter((p) => !p.isClosed());
+    // `request` is called while LEARNING, so what matters is the exploration tabs — the
+    // ones the human was driving. Replay worker tabs stay open now (they are not closed
+    // after each run), so without this they would push the relevant tabs past the cap
+    // below and we would freeze screenshots of a stale run instead of the flow we are
+    // about to distill. Exploration tabs first, then worker tabs most-recent first.
+    const pages = [
+      ...live.filter((p) => !isWorkerPage(p)),
+      ...workerTabs().filter((p) => live.includes(p)),
+    ];
     let i = 0;
     for (const p of pages.slice(0, 5)) {
       i += 1;
@@ -77,30 +95,49 @@ export async function captureScreenshotsInto(dir: string): Promise<string[]> {
 }
 
 /**
- * Each run uses a fresh tab and closes it when done (self-contained tools).
- * Exception: if `keepIf(result)` returns true, the tab is left open and brought to the
- * front — for MANUAL_CONFIRM flows where the tool prepares a write and a human must
- * review the final screen and confirm it by hand in the visible browser.
+ * Runs `fn` on the worker tab of `origin` and LEAVES IT OPEN when done.
+ *
+ * The tab is reused by every later run against the same origin and survives this one,
+ * so the user is left looking at whatever the tool produced (the profile it opened, the
+ * cart it filled) and can keep going by hand. Runs against other origins get their own
+ * tab and do not clobber it.
+ *
+ * Isolation did not disappear, it moved to the entry: `reset` blanks the tab before
+ * running. Callers pass `reset: false` when the recipe starts by navigating (a `goto`
+ * tears down the previous document by itself, so blanking first would just cost a
+ * round-trip) and `reset: true` when it does not, so a recipe that starts by clicking
+ * can never act on whatever the previous run left on screen.
+ *
+ * `focus` decides — from the result — whether to bring the tab to the front. It is off
+ * by default and on purpose: keeping the tab is for everyone, stealing the foreground
+ * is only for flows where a human has to look at the screen right now (MANUAL_CONFIRM).
  */
-export async function withFreshPage<T>(
+export async function withOriginPage<T>(
+  origin: string | undefined,
   fn: (page: Page) => Promise<T>,
-  keepIf?: (result: T) => boolean,
+  opts: { reset?: boolean; focus?: (result: T) => boolean } = {},
 ): Promise<T> {
   const b = await getBrowser();
   const context = b.contexts()[0] ?? (await b.newContext());
-  const page = await context.newPage();
-  let keep = false;
-  try {
-    const result = await fn(page);
-    keep = keepIf ? keepIf(result) : false;
-    if (keep) await page.bringToFront().catch(() => {});
-    return result;
-  } finally {
-    if (!keep) await page.close().catch(() => {});
+  const key = origin ?? UNKNOWN_ORIGIN;
+
+  let page = getWorkerTab(key);
+  if (page) {
+    if (opts.reset) await page.goto("about:blank").catch(() => {});
+  } else {
+    page = await context.newPage();
   }
+  // Register before evicting: this tab is the most recent, so it is never the victim.
+  setWorkerTab(key, page);
+  for (const stale of evictExcess()) await stale.close().catch(() => {});
+
+  const result = await fn(page);
+  if (opts.focus?.(result)) await page.bringToFront().catch(() => {});
+  return result;
 }
 
 export async function disconnectReplay(): Promise<void> {
+  resetWorkerTabs();
   if (browser) {
     await browser.close().catch(() => {});
     browser = undefined;

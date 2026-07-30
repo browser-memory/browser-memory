@@ -22,6 +22,7 @@
     "test": "node --test --import tsx \"./test/*.test.ts\"",
     "smoke": "tsx test/smoke.ts",
     "smoke:composite": "tsx test/smoke-composite.ts",
+    "smoke:tabs": "tsx test/smoke-tabs.ts",
     "smoke:explore": "tsx test/smoke-explore.ts",
     "smoke:explore:loop": "TOOL_MEMORY_REGISTRY_ENABLED=0 tsx test/smoke-explore-loop.ts",
     "e2e:remote": "tsx test/e2e-remote.ts",

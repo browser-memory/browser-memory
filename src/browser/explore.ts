@@ -1,6 +1,7 @@
 import type { BrowserContext, Page, Dialog } from "playwright";
 import { launchSharedChrome } from "./chrome.js";
 import { getSharedContext } from "./connect.js";
+import { isWorkerPage } from "./worker-tabs.js";
 import { startNetLog } from "./netlog.js";
 import { attachConsoleToPage } from "./console-log.js";
 import { buildCandidates, type ElementSig } from "./selector.js";
@@ -11,11 +12,11 @@ import { buildCandidates, type ElementSig } from "./selector.js";
  * the agent learns a NEW web action. All with the `playwright` library the project already
  * uses — a single MCP, zero extra config.
  *
- * Unlike the replay runner ([browser/connect.ts] `withFreshPage`), which uses a fresh,
- * isolated tab for each `run`, exploration keeps a persistent **active page**: the SAME one
- * the user sees, to carry over the live state (session, in-progress navigation, tabs that
- * open). The model drives it sequentially (MCP stdio), so there is no real concurrency on
- * that page.
+ * Exploration keeps a persistent **active page**: the SAME one the user sees, to carry over
+ * the live state (session, in-progress navigation, tabs that open). The model drives it
+ * sequentially (MCP stdio), so there is no real concurrency on that page. The replay runner
+ * also keeps its tabs open now ([browser/worker-tabs.ts], one per origin), so the two share
+ * a context but never a tab: `getActivePage` below refuses to adopt a worker tab.
  *
  * The snapshot uses `page.ariaSnapshot({ mode: "ai" })` (public playwright API ≥1.53): it
  * returns the a11y tree with `[ref=eN]` refs —including iframes— and those refs are resolved
@@ -87,8 +88,15 @@ export async function getActivePage(): Promise<Page> {
     for (const p of ctx.pages()) wirePage(p);
   }
 
-  if (!activePage || activePage.isClosed()) {
-    activePage = ctx.pages().find((p) => !p.isClosed()) ?? (await ctx.newPage());
+  // Replay worker tabs live in this same context and now STAY OPEN after a run
+  // (browser/worker-tabs.ts), and the `page` event above makes any new tab the active
+  // one — including theirs. Re-validating here instead of filtering the event keeps this
+  // race-free: the tab is tagged as a worker right after it is created, which is always
+  // before the agent calls an exploration tool. Exploration must never adopt one, or a
+  // bm_navigate would hijack the tab a previous run left for the user.
+  if (!activePage || activePage.isClosed() || isWorkerPage(activePage)) {
+    activePage =
+      ctx.pages().find((p) => !p.isClosed() && !isWorkerPage(p)) ?? (await ctx.newPage());
     wirePage(activePage);
   }
   return activePage;

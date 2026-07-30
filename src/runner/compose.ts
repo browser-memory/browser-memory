@@ -1,5 +1,5 @@
-import { run, injectParams, type RunResult } from "./execute.js";
-import { resolveItem } from "../registry/resolve.js";
+import { run, injectParams, bumpHealth, type RunResult } from "./execute.js";
+import { resolveItem, isRemoteSource } from "../registry/resolve.js";
 import { logEvent, formatMsg } from "../registry/log.js";
 import { newRunId } from "../registry/run-id.js";
 import { isComposite } from "../schema/tool.js";
@@ -66,8 +66,10 @@ export async function runComposite(
 
   // Unified resolution (Option A): a composite can also live on the server.
   let composite: Composite;
+  let remote = false;
   try {
     const resolved = await resolveItem(name);
+    remote = isRemoteSource(resolved.source);
     if (!isComposite(resolved.item)) {
       return {
         ok: false,
@@ -121,6 +123,10 @@ export async function runComposite(
     });
     if (!res.ok) {
       // Precondition or execution failed: we abort the chain reporting where.
+      // Same rule as the primitive runner: ONLY tool-broken counts against health.
+      // A re-auth/not-applicable comes from the environment and must not inflate the
+      // composite's fail_count (nor reset its last_ok).
+      if (res.error?.mode === "tool-broken") bumpHealth(composite, false, remote);
       steps.push({ tool: link.tool, ok: false, error: res.error });
       return { ok: false, steps, handles, aborted_at: { index: i, tool: link.tool } };
     }
@@ -134,5 +140,6 @@ export async function runComposite(
     steps.push(stepResult);
   }
 
+  bumpHealth(composite, true, remote);
   return { ok: true, steps, handles };
 }

@@ -63,9 +63,34 @@ export const HttpRecipe = z.object({
   jsonPath: z.string().optional(),
 });
 
+/**
+ * An in-page `fetch` replayed from the site's own origin.
+ *
+ * The middle ground between the two above, and usually the best of the three. `http`
+ * calls the endpoint from Node, so it carries NO cookies and dies on anything that
+ * needs a session; `playwright` drives the UI, which works but is slow and fragile.
+ * Here the request runs INSIDE the tab, same-origin, so the browser attaches the
+ * session by itself — and because the worker tab for that origin usually already is on
+ * the site (browser/worker-tabs.ts), replaying costs one `evaluate` and no navigation.
+ *
+ * `fn` is a serialized async function called as `(params)` in the page, exactly like a
+ * dom extractor: it must read its inputs from `params.<name>` and must not rely on
+ * eval/Function (blocked by many sites' CSP). It returns the data.
+ */
+export const FetchReplayRecipe = z.object({
+  kind: z.literal("fetch-replay"),
+  /** Origin the fetch must run from, e.g. "https://www.linkedin.com". */
+  origin: z.string(),
+  /** Serialized async fn, called as (params) inside the page. Returns the data. */
+  fn: z.string(),
+  /** Page to land on when the tab isn't on `origin` yet. Defaults to `origin`. */
+  url: z.string().optional(),
+});
+
 export const Recipe = z.discriminatedUnion("kind", [
   PlaywrightRecipe,
   HttpRecipe,
+  FetchReplayRecipe,
 ]);
 export type Recipe = z.infer<typeof Recipe>;
 

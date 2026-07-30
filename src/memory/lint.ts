@@ -25,11 +25,28 @@ function recipeTexts(tool: Tool): string[] {
     for (const s of tool.recipe.steps) {
       for (const v of [s.url, s.selector, s.value, s.expr]) if (v) texts.push(v);
     }
+  } else if (tool.recipe.kind === "fetch-replay") {
+    // NOT the `fn`: like an extractor it receives params as an argument, it is not a
+    // template. It is checked below, by the same rules as the extractor.
+    texts.push(tool.recipe.origin, tool.recipe.url ?? "");
   } else {
     texts.push(tool.recipe.url, tool.recipe.body ?? "");
     for (const v of Object.values(tool.recipe.headers ?? {})) texts.push(v);
   }
   return texts.filter(Boolean);
+}
+
+/**
+ * The serialized functions that receive the run params as an argument and get evaluated
+ * inside the page: the dom extractor and the `fn` of a fetch-replay recipe. Both are
+ * subject to the same discipline — read inputs from `params.<name>`, never as a free
+ * variable, which in the page simply does not exist.
+ */
+function paramFns(tool: Tool): string[] {
+  const fns: string[] = [];
+  if (tool.result_extractor?.type === "dom") fns.push(tool.result_extractor.fn);
+  if (tool.recipe.kind === "fetch-replay") fns.push(tool.recipe.fn);
+  return fns;
 }
 
 /**
@@ -68,7 +85,8 @@ export function lintTool(tool: Tool): string[] {
   const problems: string[] = [];
   const declared = Object.keys(tool.requires.params);
   const allText = recipeTexts(tool).join("\n");
-  const fn = tool.result_extractor?.type === "dom" ? tool.result_extractor.fn : "";
+  const fns = paramFns(tool);
+  const fn = fns.join("\n");
 
   // 1. well-formed {{param}} placeholders: register them and validate the filter.
   const usedInRecipe = new Set<string>();
@@ -96,7 +114,7 @@ export function lintTool(tool: Tool): string[] {
   for (const p of declared) {
     if (!usedInRecipe.has(p) && !readsFromParams(p)) {
       problems.push(
-        `the param '${p}' is declared but isn't used in the recipe or the extractor`,
+        `the param '${p}' is declared but isn't used in the recipe or the extractor/fn`,
       );
     }
   }
@@ -108,7 +126,7 @@ export function lintTool(tool: Tool): string[] {
     const usesBare = new RegExp(`(?<![\\w.$])${p}\\b`).test(fn);
     if (usesBare && !readsFromParams(p)) {
       problems.push(
-        `the extractor uses '${p}' bare; params arrive as the 2nd argument — use params.${p}`,
+        `the extractor/fn uses '${p}' bare; params arrive as an argument — use params.${p}`,
       );
     }
   }

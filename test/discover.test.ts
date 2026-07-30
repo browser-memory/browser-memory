@@ -72,6 +72,52 @@ test("an unknown site does not match", () => {
   assert.equal(r.length, 0);
 });
 
+// A ccTLD is not a brand. While "mx" counted as a significant token, every .mx site matched
+// every other one, so asking about Amazon Mexico also returned Airbnb's and Walmart's tools.
+const mxTools = [
+  { name: "amazon-mx-probe", site: "amazon.com.mx" },
+  { name: "airbnb-mx-probe", site: "airbnb.mx" },
+  { name: "walmart-mx-probe", site: "walmart.com.mx" },
+  { name: "walmart-us-probe", site: "walmart.com" },
+].map((t) => ({
+  ...t,
+  intent: `probe ${t.name}`,
+  keywords: [t.name],
+  type: "primitive",
+  side_effect: "read",
+  requires: { params: {}, env: {} },
+  recipe: { kind: "playwright", steps: [{ action: "navigate", url: `https://${t.site}/` }] },
+  success_assertion: { type: "dom", expr: "body" },
+}));
+for (const t of mxTools) saveTool(t);
+
+test("a shared ccTLD does not bridge unrelated brands", () => {
+  const names = discover(["amazon.com.mx"]).map((c) => c.name);
+  assert.deepEqual(names, ["amazon-mx-probe"], `.mx leaked into the match: ${names.join(", ")}`);
+  assert.ok(!discover(["airbnb.mx"]).some((c) => c.name === "amazon-mx-probe"));
+});
+
+test("the ccTLD site is still findable by its own domain and by brand", () => {
+  for (const term of ["amazon.com.mx", "www.amazon.com.mx", "https://amazon.com.mx/gp/cart", "amazon"]) {
+    assert.ok(
+      discover([term]).some((c) => c.name === "amazon-mx-probe"),
+      `expected to match amazon-mx-probe with "${term}"`,
+    );
+  }
+});
+
+test("the same brand across countries keeps matching (that's what bridges .com ↔ .mx)", () => {
+  const byBrand = discover(["walmart"]).map((c) => c.name).sort();
+  assert.deepEqual(byBrand, ["walmart-mx-probe", "walmart-us-probe"]);
+  // and asking for the US domain still reaches the MX one, via the brand token
+  assert.ok(discover(["walmart.com"]).some((c) => c.name === "walmart-mx-probe"));
+});
+
+test("a leading two-letter label is NOT a ccTLD: es.wikipedia.org keeps matching 'es'", () => {
+  assert.ok(discover(["es"]).some((c) => c.name === "wikipedia-search"));
+  assert.ok(discover(["es.wikipedia.org"]).some((c) => c.name === "wikipedia-search"));
+});
+
 test("an empty list returns empty", () => {
   assert.equal(discover([]).length, 0);
 });

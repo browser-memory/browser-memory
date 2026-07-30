@@ -36,14 +36,28 @@ const GENERIC_DOMAIN_PARTS = new Set([
  * Significant labels of a site: without scheme/www/path (normalizeSite) and without generic
  * domain parts (TLDs, www, co...). E.g.: "infobae.com" → ["infobae"],
  * "es.wikipedia.org" → ["es", "wikipedia"], "news.ycombinator.com" → ["news",
- * "ycombinator"]. Does NOT filter by length: so "x.com" → ["x"] and matches "x" (one-letter
- * domains like Twitter/X). The cost is accepting short ccTLDs as a token ("es",
- * "io"), marginal noise compared to supporting one-letter brands.
+ * "ycombinator"]. Also drops the TRAILING ccTLD, so "amazon.com.mx" → ["amazon"]. Does NOT
+ * filter by length beyond that: so "x.com" → ["x"] and matches "x" (one-letter domains like
+ * Twitter/X).
+ *
+ * The trailing ccTLD has to go or it becomes a token that bridges unrelated brands: while
+ * "mx" was significant, `discover(["amazon.com.mx"])` also returned airbnb.mx and
+ * walmart.com.mx — asking about Amazon handed back Airbnb's tools. Only the LAST label is
+ * dropped, and only when there is more than one: "es.wikipedia.org" must keep "es" as a
+ * significant subdomain, and a bare "x" or "mx" IS the brand the caller typed.
+ *
+ * Same-brand cross-country matching survives on purpose ("walmart.com" ↔ "walmart.com.mx",
+ * "airbnb.com" ↔ "airbnb.mx"): that goes through the brand token, and it's what makes a site
+ * published under one ccTLD findable from another.
  */
 function siteCoreTokens(site: string): string[] {
-  return normalizeSite(site)
+  const labels = normalizeSite(site)
     .split(".")
-    .filter((p) => p && !GENERIC_DOMAIN_PARTS.has(p));
+    .filter(Boolean);
+  const last = labels.length - 1;
+  return labels.filter(
+    (p, i) => !GENERIC_DOMAIN_PARTS.has(p) && !(labels.length > 1 && i === last && p.length === 2),
+  );
 }
 
 /** Composites first (§10.2); stable for the rest. */
