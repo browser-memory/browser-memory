@@ -5,9 +5,10 @@ import { z } from "zod";
 
 import { join } from "node:path";
 
-import { launchSharedChrome, stopSharedChrome } from "./browser/chrome.js";
+import { stopSharedChrome } from "./browser/chrome.js";
 import { disconnectReplay, captureScreenshotsInto } from "./browser/connect.js";
-import { startNetLog, getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
+// side effect on import: the recorder registers itself to attach when Chrome comes up.
+import { getNetLog, mergeNetwork, clearNetLog } from "./browser/netlog.js";
 import { getConsoleLog, clearConsoleLog, pickConsole } from "./browser/console-log.js";
 import * as explore from "./browser/explore.js";
 import { bmHandler } from "./browser/bm-handler.js";
@@ -237,20 +238,13 @@ server.tool(
     if (candidates.length === 0) {
       logEvent({ event_type: "discover_miss", sites });
     }
-    // every discover marks the START of a new task: we launch Chrome (best-effort) and
-    // reset+start the network recorder ALWAYS, whether there are tools or not. This way, even if the
-    // agent runs a known tool and THEN explores a new action on the same site,
-    // its network is recorded (we don't depend on re-entering through the "no candidates" branch).
-    // It survives redirects, unlike the agent's snapshot. Idempotent: if Chrome is already
-    // alive it's a fast-path; if not, it gets ahead of the launch run() would do anyway.
-    try {
-      await launchSharedChrome();
-      await startNetLog();
-    } catch (e) {
-      process.stderr.write(
-        `[tool-memory] couldn't pre-launch Chrome / start the recorder: ${(e as Error).message}\n`,
-      );
-    }
+    // discover does NOT touch the browser: it's a search over the on-disk index + the remote
+    // registry, so opening a Chrome window here would be a visible side effect for a call
+    // that may end in a `http` recipe, or in nothing at all. Chrome is launched by whoever
+    // actually needs it (run / bm_* / request), and the network recorder attaches itself the
+    // moment that happens (browser/netlog.ts registers an onBrowserReady hook), so a run
+    // followed by exploration on the same site is still fully recorded.
+
     // if the remote refused (auth / limit), we prepend its notice as a separate text
     // block; the candidates still go as parseable JSON in the second block.
     const content: { type: "text"; text: string }[] = [];

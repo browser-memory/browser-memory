@@ -20,6 +20,20 @@ import {
 
 let browser: Browser | undefined;
 
+/**
+ * Hooks that run right after the shared Chrome comes up, whoever launched it (a `run`,
+ * an exploration tool, a `request`). The network recorder registers itself here so it
+ * starts recording as soon as there IS a browser, instead of forcing a launch of its own
+ * from a tool that doesn't need one (`discover` used to pre-launch just for this).
+ * Fired after `browser` is set, so a hook calling back in gets the cached instance.
+ */
+type ReadyHook = () => void | Promise<void>;
+const readyHooks: ReadyHook[] = [];
+
+export function onBrowserReady(hook: ReadyHook): void {
+  readyHooks.push(hook);
+}
+
 export interface ReplayHandle {
   browser: Browser;
   context: BrowserContext;
@@ -33,6 +47,13 @@ async function getBrowser(): Promise<Browser> {
   // (idempotent: reuses if there's already a live CDP). So connecting the MCP doesn't open Chrome.
   await launchSharedChrome();
   browser = await chromium.connectOverCDP(cdpEndpoint);
+  for (const hook of readyHooks) {
+    try {
+      await hook();
+    } catch {
+      /* best-effort: a hook must never break the connection */
+    }
+  }
   return browser;
 }
 

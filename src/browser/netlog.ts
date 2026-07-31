@@ -1,5 +1,5 @@
 import type { BrowserContext, Request, Response } from "playwright";
-import { getSharedContext } from "./connect.js";
+import { getSharedContext, onBrowserReady } from "./connect.js";
 
 /**
  * Network recorder over the shared Chrome (via CDP).
@@ -137,7 +137,11 @@ function capturableMime(mime: string): boolean {
 
 let buffer: NetEntry[] = [];
 let seq = 0;
-let attached = false;
+/**
+ * The context the listeners are on, so a Chrome that was closed and relaunched gets wired
+ * again instead of leaving us silently deaf on a dead context.
+ */
+let attachedTo: BrowserContext | undefined;
 /** Correlates the response with its request to fill in the status. */
 const byReq = new WeakMap<Request, NetEntry>();
 
@@ -199,23 +203,33 @@ function attachTo(ctx: BrowserContext): void {
 }
 
 /**
- * Ensures the recorder is attached and recording. Called on EVERY `discover`. It does NOT
- * clear the buffer: it accumulates across the whole task, so several discovers (e.g.
- * multi-site: discover(["kayak"]) and then discover(["google"])) ADD UP instead of
- * overwriting. The buffer is cleared only when a `request` freezes the episode into a trace
- * (see clearNetLog). Idempotent: the listeners are set only once.
+ * Ensures the recorder is attached and recording. It runs on its own as soon as the shared
+ * Chrome comes up (see the onBrowserReady registration below), so a `run` is recorded even
+ * if the agent explores the same site afterwards — without any tool having to launch the
+ * browser just to start recording. It does NOT clear the buffer: it accumulates across the
+ * whole task, so several episodes (e.g. a run on kayak and then exploring google) ADD UP
+ * instead of overwriting. The buffer is cleared only when a `request` freezes the episode
+ * into a trace (see clearNetLog). Idempotent: the listeners are set only once.
+ *
+ * Careful: calling it when there's NO browser launches one (getSharedContext). Only call it
+ * directly from a path that is going to use the browser anyway.
  */
 export async function startNetLog(): Promise<void> {
-  if (attached) return;
   try {
-    attachTo(await getSharedContext());
-    attached = true;
+    const ctx = await getSharedContext();
+    if (ctx === attachedTo) return;
+    attachTo(ctx);
+    attachedTo = ctx;
   } catch (e) {
     process.stderr.write(
       `[tool-memory] could not start the network recorder: ${(e as Error).message}\n`,
     );
   }
 }
+
+// Attach as soon as there is a browser, no matter who launched it (a `run`, an exploration
+// tool, a `request`). This is why `discover` doesn't have to pre-launch Chrome to record.
+onBrowserReady(startNetLog);
 
 /** Snapshot of the buffer accumulated so far. */
 export function getNetLog(): NetEntry[] {
