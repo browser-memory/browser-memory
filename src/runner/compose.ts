@@ -26,6 +26,12 @@ export interface ComposeResult {
   steps: ComposeStepResult[];
   /** handles accumulated at the end (params + outs). */
   handles: Record<string, unknown>;
+  /**
+   * Result of the LAST step of the chain — the composite's payload. The last step never
+   * has an `out` (it feeds nobody), so without this its data was silently dropped and a
+   * read composite returned `ok: true` with nothing usable.
+   */
+  result?: unknown;
   /** step where it aborted, if it aborted. */
   aborted_at?: { index: number; tool: string };
 }
@@ -63,6 +69,7 @@ export async function runComposite(
 ): Promise<ComposeResult> {
   const handles: Record<string, unknown> = { ...params };
   const steps: ComposeStepResult[] = [];
+  let lastResult: unknown = undefined;
 
   // Unified resolution (Option A): a composite can also live on the server.
   let composite: Composite;
@@ -138,8 +145,9 @@ export async function runComposite(
       stepResult.out = { name: link.out, value };
     }
     steps.push(stepResult);
+    lastResult = res.result;
   }
 
   bumpHealth(composite, true, remote);
-  return { ok: true, steps, handles };
+  return { ok: true, steps, handles, result: lastResult };
 }
