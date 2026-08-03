@@ -18,12 +18,12 @@
 
 ## Install
 
-Requires **Node.js ≥ 20** and **Google Chrome** installed.
+Requires **Node.js ≥ 18** and **Google Chrome** installed.
 
 One command configures every supported agent it finds on the machine — **Codex, Cursor, VS Code (Copilot) and Claude Code**:
 
 ```bash
-npx -y browser-memory install
+npx -y browser-memory@latest install
 ```
 
 Then **restart the app**: MCP servers are negotiated when the session starts, so a new chat isn't enough. It's idempotent (never overwrites an existing entry).
@@ -31,7 +31,7 @@ Then **restart the app**: MCP servers are negotiated when the session starts, so
 To install into a single host, name it (`codex` · `cursor` · `vscode` · `claude`):
 
 ```bash
-npx -y browser-memory install cursor
+npx -y browser-memory@latest install cursor
 ```
 
 ### Claude desktop app & Cowork
@@ -46,10 +46,22 @@ Install browser-memory by following https://raw.githubusercontent.com/browser-me
 Or skip the agent: [download the bundle](https://github.com/browser-memory/browser-memory/releases/latest/download/browser-memory.mcpb),
 double-click it, install, and restart the app. Same result.
 
+## Update
+
+The entry written above runs `browser-memory@latest`, so new releases are picked up on their own
+when the app starts a session. If the server was installed **before v0.1.22** — or ever seems
+stuck on an old version — rewrite the entry once:
+
+```bash
+npx -y browser-memory@latest update
+```
+
+…and restart the app. Takes the same optional host as `install`.
+
 ## Disconnect
 
 ```bash
-npx -y browser-memory uninstall
+npx -y browser-memory@latest uninstall
 ```
 
 …and restart the app. This is the only way to remove it — an MCP server cannot unload itself from a live session. It takes the same optional host as `install`, and it only touches the host's config: your learned tools (`~/.tool-memory`) and the Chrome profile are left alone.
@@ -57,7 +69,7 @@ npx -y browser-memory uninstall
 **Any other MCP host** — drop this into its config (most clients use the `mcpServers` key; VS Code uses `servers`):
 
 ```json
-{ "mcpServers": { "browser-memory": { "command": "npx", "args": ["-y", "browser-memory"] } } }
+{ "mcpServers": { "browser-memory": { "command": "npx", "args": ["-y", "browser-memory@latest"] } } }
 ```
 
 ## Registry (optional)
@@ -67,7 +79,7 @@ On by default — it pulls ready-made tools from the hosted registry (`https://a
 Signing in is optional, and only if the backend asks for a key:
 
 ```bash
-npx -y browser-memory login
+npx -y browser-memory@latest login
 ```
 
 (or set `TOOL_MEMORY_REGISTRY_KEY` yourself). The server never starts a login flow on its own.

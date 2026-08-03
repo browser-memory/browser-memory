@@ -12,6 +12,7 @@ import {
   type HostResult,
   installHost,
   uninstallHost,
+  updateHost,
   detectedHosts,
 } from "./install.js";
 import { rmSync, existsSync } from "node:fs";
@@ -49,6 +50,9 @@ With no arguments it starts the MCP server (stdio). Subcommands:
 
   install [host]              add this server to a host's MCP config
                                 host: codex | cursor | vscode | claude · omit = autodetect
+  update [host]               rewrite the entry to the current invocation (same hosts).
+                                Use this on a machine stuck on an old version: entries
+                                written before 0.1.22 don't track new releases by themselves.
   uninstall [host]            remove it again (same hosts; omit = autodetect).
                                 This is the ONLY way to disconnect the server: it can't
                                 unload itself from a live session. Restart the app after.
@@ -105,6 +109,8 @@ function fmtResult(r: HostResult): string {
       return `  ✓ ${r.host} added${at}`;
     case "already":
       return `  • ${r.host} already configured${at}`;
+    case "updated":
+      return `  ✓ ${r.host} entry rewritten${at}`;
     case "removed":
       return `  ✓ ${r.host} removed${at}`;
     case "absent":
@@ -116,9 +122,10 @@ function fmtResult(r: HostResult): string {
   }
 }
 
-/** `install [host]` / `uninstall [host]`. Empty host = every detected host. */
-function runInstall(action: "install" | "uninstall", host: string): void {
-  const run = (h: Host) => (action === "install" ? installHost(h) : uninstallHost(h));
+/** `install [host]` / `update [host]` / `uninstall [host]`. Empty host = every detected host. */
+function runInstall(action: "install" | "update" | "uninstall", host: string): void {
+  const run = (h: Host) =>
+    action === "install" ? installHost(h) : action === "update" ? updateHost(h) : uninstallHost(h);
   try {
     let results: HostResult[];
     if (!host) {
@@ -138,12 +145,14 @@ function runInstall(action: "install" | "uninstall", host: string): void {
       );
     }
     for (const r of results) out(fmtResult(r));
-    if (action === "install" && results.some((r) => r.status === "added"))
+    if (results.some((r) => r.status === "added" || r.status === "updated"))
       out("  Restart the affected app(s) for the change to take effect.");
+    if (action === "update" && results.some((r) => r.status === "updated"))
+      out("  The entry now runs `npx -y browser-memory@latest`, which follows new releases.");
     // The only way out is this same CLI: an MCP server can't unload itself from a live
     // session, so we say it here, where the user is already looking.
     if (action === "install" && results.some((r) => r.status === "added" || r.status === "already"))
-      out("  To disconnect it later: `npx -y browser-memory uninstall` (then restart the app).");
+      out("  To disconnect it later: `npx -y browser-memory@latest uninstall` (then restart the app).");
     if (results.some((r) => r.status === "error")) process.exitCode = 1;
   } catch (e) {
     err(`error: ${(e as Error).message}`);
@@ -211,7 +220,7 @@ export async function runCli(argv: string[]): Promise<void> {
     return;
   }
 
-  if (cmd === "install" || cmd === "uninstall") {
+  if (cmd === "install" || cmd === "update" || cmd === "uninstall") {
     runInstall(cmd, (rest[0] ?? "").toLowerCase());
     return;
   }

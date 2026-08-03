@@ -43,8 +43,12 @@ follow cross-host redirects reports that no checksum exists (this happened on a 
 - **Signing** is optional; unsigned installs fine. `npx mcpb sign browser-memory.mcpb
   --self-signed` only changes what the install dialog says about the publisher — the "developer
   not verified by Anthropic" warning stays either way.
-- **No auto-update.** `npx -y browser-memory` always runs the latest; a bundle is pinned to the
-  version the user installed. A new release means telling bundle users to download again.
+- **Update story differs per route.** Route A entries run `npx -y browser-memory@latest`; the
+  explicit tag makes npx re-check the registry at session start (a *bare* name can be served
+  forever from a stale npx cache on pre-8.12 npm, or shadowed by an old `npm i -g` — that is
+  how a demo machine stayed frozen on 0.1.17; entries written before 0.1.22 are repaired with
+  `npx -y browser-memory@<new-version> update`). A bundle is pinned to the version the user
+  installed: a new release means telling bundle users to download again.
 
 ## Platform support
 

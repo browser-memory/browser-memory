@@ -21,7 +21,7 @@ Chrome and cannot run without it.
 - you have no way to register an MCP server yourself.
 
 **Route A — the installer** — otherwise (Claude Code, Cursor, VS Code/Copilot, Codex). Route A
-also needs Node.js 20+: run `node -v`, and if Node is missing or older than 20, STOP and tell
+also needs Node.js 18+: run `node -v`, and if Node is missing or older than 18, STOP and tell
 the user to install it from https://nodejs.org/en/download — do not try to install it yourself.
 
 If you are unsure, try Route A. If it errors out or reports `unavailable` for every host, do
@@ -32,7 +32,7 @@ Route B instead.
 ## Route A — the installer
 
 ### A1. Install
-    npx -y browser-memory install
+    npx -y browser-memory@latest install
 
 That's the whole install. It autodetects every supported agent on this machine (Claude Code,
 Cursor, VS Code/Copilot, Codex) and writes the MCP entry in the format each one needs. It is
@@ -44,18 +44,18 @@ Use the section for the agent you are, at USER level (never a project-scoped con
 overwrite an existing browser-memory entry. If none of these match you, tell the user and stop.
 
 Claude Code:
-    claude mcp add --scope user browser-memory -- npx -y browser-memory
+    claude mcp add --scope user browser-memory -- npx -y browser-memory@latest
 
 Cursor — ~/.cursor/mcp.json:
-    { "mcpServers": { "browser-memory": { "command": "npx", "args": ["-y", "browser-memory"] } } }
+    { "mcpServers": { "browser-memory": { "command": "npx", "args": ["-y", "browser-memory@latest"] } } }
 
 VS Code (Copilot) — the user-level mcp.json:
-    { "servers": { "browser-memory": { "type": "stdio", "command": "npx", "args": ["-y", "browser-memory"] } } }
+    { "servers": { "browser-memory": { "type": "stdio", "command": "npx", "args": ["-y", "browser-memory@latest"] } } }
 
 Codex — ~/.codex/config.toml:
     [mcp_servers.browser-memory]
     command = "npx"
-    args = ["-y", "browser-memory"]
+    args = ["-y", "browser-memory@latest"]
 
 ### A3. Finish
 Say this to the user, in their language, in one line, and nothing else — no jargon here either,
@@ -69,8 +69,8 @@ Airbnb for stays in Bariloche from August 10th to 15th for two people."
 ## Route B — the bundle
 
 You cannot install this yourself: you download the file, your reply carries it, and the user
-installs it with two clicks. Do not try to edit any config, and do not run `npx -y browser-memory
-install`.
+installs it with two clicks. Do not try to edit any config, and do not run the
+`npx … install` command from Route A.
 
 ### B1. Download it, and make the file land IN your reply
 
@@ -164,7 +164,7 @@ chat inside the app that is already running is NOT enough.
 
 ## Removing it later
 Route A:
-    npx -y browser-memory uninstall
+    npx -y browser-memory@latest uninstall
 
 Route B: Settings → Extensions → Browser Memory → **Uninstall**.
 

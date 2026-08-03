@@ -24,6 +24,8 @@ import {
   detectedHosts,
   installHost,
   uninstallHost,
+  updateHost,
+  jsonUpdateServer,
 } from "../src/install.ts";
 
 function tmp(prefix: string): string {
@@ -56,7 +58,7 @@ test("cursor/vscode paths sit under the given home", () => {
 test("tomlAdd appends once and is idempotent", () => {
   const added = tomlAdd("");
   assert.match(added!, /\[mcp_servers\.browser-memory\]/);
-  assert.match(added!, /args = \["-y", "browser-memory"\]/);
+  assert.match(added!, /args = \["-y", "browser-memory@latest"\]/);
   assert.equal(tomlAdd(added!), null); // already present
 });
 
@@ -116,7 +118,7 @@ test("installHost(vscode) uses the servers key with type stdio", () => {
   assert.deepEqual(obj.servers["browser-memory"], {
     type: "stdio",
     command: "npx",
-    args: ["-y", "browser-memory"],
+    args: ["-y", "browser-memory@latest"],
   });
   assert.equal(uninstallHost("vscode", file).status, "removed");
 });
@@ -129,6 +131,54 @@ test("installHost(codex) round-trips add → already → removed → absent", ()
   assert.equal(uninstallHost("codex", file).status, "removed");
   assert.doesNotMatch(readFileSync(file, "utf8"), /browser-memory/);
   assert.equal(uninstallHost("codex", file).status, "absent");
+});
+
+// --- update: the repair path for entries written by older versions ---------
+
+test("jsonUpdateServer overwrites an existing entry, adds a missing one", () => {
+  const file = join(tmp("upd-"), "mcp.json");
+  assert.equal(jsonUpdateServer(file, "mcpServers", { command: "npx", args: ["-y", "x"] }), "added");
+  assert.equal(jsonUpdateServer(file, "mcpServers", { command: "npx", args: ["-y", "y"] }), "updated");
+  const obj = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(obj.mcpServers["browser-memory"].args, ["-y", "y"]);
+});
+
+test("updateHost(cursor) rewrites a stale unpinned entry to @latest", () => {
+  const file = join(tmp("upd-cursor-"), "mcp.json");
+  // The exact shape install <=0.1.21 used to write — frozen on old machines.
+  writeFileSync(
+    file,
+    JSON.stringify({ mcpServers: { "browser-memory": { command: "npx", args: ["-y", "browser-memory"] }, other: { command: "x" } } }),
+  );
+  const r = updateHost("cursor", file);
+  assert.equal(r.status, "updated");
+  const obj = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(obj.mcpServers["browser-memory"].args, ["-y", "browser-memory@latest"]);
+  assert.ok(obj.mcpServers.other); // untouched
+});
+
+test("updateHost(codex) replaces the old block, or adds when absent", () => {
+  const file = join(tmp("upd-codex-"), "config.toml");
+  writeFileSync(file, '[mcp_servers.browser-memory]\ncommand = "npx"\nargs = ["-y", "browser-memory"]\n');
+  assert.equal(updateHost("codex", file).status, "updated");
+  const content = readFileSync(file, "utf8");
+  assert.match(content, /args = \["-y", "browser-memory@latest"\]/);
+  assert.doesNotMatch(content, /args = \["-y", "browser-memory"\]/);
+
+  const fresh = join(tmp("upd-codex2-"), "config.toml");
+  assert.equal(updateHost("codex", fresh).status, "added");
+});
+
+test("updateHost(vscode) keeps the stdio shape", () => {
+  const file = join(tmp("upd-vscode-"), "mcp.json");
+  writeFileSync(file, JSON.stringify({ servers: { "browser-memory": { type: "stdio", command: "npx", args: ["-y", "browser-memory"] } } }));
+  assert.equal(updateHost("vscode", file).status, "updated");
+  const obj = JSON.parse(readFileSync(file, "utf8"));
+  assert.deepEqual(obj.servers["browser-memory"], {
+    type: "stdio",
+    command: "npx",
+    args: ["-y", "browser-memory@latest"],
+  });
 });
 
 // --- detection ------------------------------------------------------------

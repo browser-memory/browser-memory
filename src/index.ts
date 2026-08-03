@@ -93,7 +93,7 @@ Rules: parametrize whatever varies (q, hours), don't hardcode it. Secrets never 
 tools/traces. write-irreversible (sending, paying) has NO confirmation gate yet:
 every run executes for real — confirm with the user before replaying one.
 
-To DISCONNECT this server, the user runs \`npx -y browser-memory uninstall\` in a
+To DISCONNECT this server, the user runs \`npx -y browser-memory@latest uninstall\` in a
 terminal and restarts the app: that removes the entry from the host's MCP config. It
 CANNOT be unloaded from inside the session, so tell them those two steps if they ask.
 \`uninstall\` takes the same optional host as \`install\` (codex | cursor | vscode |
@@ -124,7 +124,7 @@ function rateLimitNotice(e: RegistryRateLimitError): string {
 function authNotice(): string {
   return (
     "The remote registry rejected the request (anonymous or invalid key): local tools only. " +
-    "To use the remote catalog, run `npx -y browser-memory login` or set TOOL_MEMORY_REGISTRY_KEY."
+    "To use the remote catalog, run `npx -y browser-memory@latest login` or set TOOL_MEMORY_REGISTRY_KEY."
   );
 }
 
