@@ -21,4 +21,5 @@ PUBLISH.md
 # external trace tooling (Python) — do not version
 webtrace/
 __pycache__/
-SHA256SUMS
+# the release artifact at the root is generated; docs/SHA256SUMS IS published and tracked
+/SHA256SUMS
