@@ -28,8 +28,11 @@ export interface Candidate {
 }
 
 // Domain parts that do NOT identify a site (TLDs and generic subdomains).
+// `gob` is the Spanish-speaking world's `gov` (bcra.gob.ar, comprar.gob.ar): without it every
+// government site bridges to every other one, and even a host nobody published
+// (`anses.gob.ar`) matches all of them.
 const GENERIC_DOMAIN_PARTS = new Set([
-  "www", "com", "org", "net", "edu", "gov", "mil", "int", "info", "biz", "co",
+  "www", "com", "org", "net", "edu", "gov", "gob", "mil", "int", "info", "biz", "co",
 ]);
 
 /**

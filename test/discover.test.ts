@@ -118,6 +118,50 @@ test("a leading two-letter label is NOT a ccTLD: es.wikipedia.org keeps matching
   assert.ok(discover(["es.wikipedia.org"]).some((c) => c.name === "wikipedia-search"));
 });
 
+// Neither is `gob` a brand. Four unrelated Argentine agencies share it (the central bank,
+// the official gazette, the state's procurement portal and the tax agency), so while it
+// counted as a significant token, asking about any one of them by domain returned all four
+// — and so did a host nobody ever published.
+const gobTools = [
+  { name: "bcra-probe", site: "bcra.gob.ar" },
+  { name: "boletin-probe", site: "boletinoficial.gob.ar" },
+  { name: "comprar-probe", site: "comprar.gob.ar" },
+  { name: "afip-probe", site: "fe.afip.gob.ar" },
+].map((t) => ({
+  ...t,
+  intent: `probe ${t.name}`,
+  keywords: [t.name],
+  type: "primitive",
+  side_effect: "read",
+  requires: { params: {}, env: {} },
+  recipe: { kind: "playwright", steps: [{ action: "navigate", url: `https://${t.site}/` }] },
+  success_assertion: { type: "dom", expr: "body" },
+}));
+for (const t of gobTools) saveTool(t);
+
+test("a shared `gob` does not bridge unrelated agencies", () => {
+  assert.deepEqual(discover(["bcra.gob.ar"]).map((c) => c.name), ["bcra-probe"]);
+  assert.deepEqual(discover(["comprar.gob.ar"]).map((c) => c.name), ["comprar-probe"]);
+  // and an unpublished government host matches nothing instead of everything
+  assert.equal(discover(["anses.gob.ar"]).length, 0);
+});
+
+test("each agency stays findable by its own brand, domain or subdomain", () => {
+  for (const [term, name] of [
+    ["bcra", "bcra-probe"],
+    ["boletinoficial", "boletin-probe"],
+    ["comprar", "comprar-probe"],
+    ["afip", "afip-probe"],
+    ["fe.afip.gob.ar", "afip-probe"],
+    ["https://www.bcra.gob.ar/BCRAyVos/", "bcra-probe"],
+  ] as const) {
+    assert.ok(
+      discover([term]).some((c) => c.name === name),
+      `expected to match ${name} with "${term}"`,
+    );
+  }
+});
+
 test("an empty list returns empty", () => {
   assert.equal(discover([]).length, 0);
 });
