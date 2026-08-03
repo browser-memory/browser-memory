@@ -65,27 +65,35 @@ You cannot install this yourself: you download a file and the user installs it w
 Do not try to edit any config, and do not try to run `npx -y browser-memory install`.
 
 ### B1. Download it into the folder you are working in
-It has to land in the folder the user opened, because that folder is on their real disk —
-anywhere else and they cannot double-click it.
 
     curl -fL --retry 2 https://github.com/browser-memory/browser-memory/releases/latest/download/browser-memory.mcpb -o ./browser-memory.mcpb
 
+The user has to end up with this file on the machine their Claude app runs on. Which is where
+it already is, or one extra click, depending on where you run:
+
+- **Your folder is on the user's own machine** — they open it from there.
+- **You are a remote or cloud session** — your folder is NOT their disk. Attach the file to your
+  reply / present it as a download, so they can save it. Say which button to use rather than
+  telling them to look for a file they cannot see.
+
 ### B2. Verify it
-Never hand a user a binary you did not check.
+Run both of these and compare. This is the only check that counts.
 
     curl -fsSL https://github.com/browser-memory/browser-memory/releases/latest/download/SHA256SUMS
     shasum -a 256 ./browser-memory.mcpb          # Windows: certutil -hashfile browser-memory.mcpb SHA256
 
-The two hashes must match. If they do not, delete the file and tell the user the download was
-corrupt — do not tell them to install it anyway. If no hashing tool exists on this machine, say
-so plainly instead of pretending you checked.
+The two hashes must match, and you must tell the user the hash you got. Do NOT substitute a
+different check: unzipping the bundle and reading its manifest proves it is *a* bundle, not that
+it is *this* bundle, and it is not a verification. If the hashes differ, delete the file and say
+the download was corrupt — do not tell them to install it anyway. If neither hashing command
+exists here, say plainly that you could not verify it instead of implying you did.
 
 ### B3. Tell the user to install it
-Print exactly this, with the real folder name, and nothing else:
+Print this and nothing else, with step 1 matching where the file actually is:
 
-> Listo — bajé `browser-memory.mcpb` a tu carpeta y verifiqué el hash ✓
+> Listo — `browser-memory.mcpb`, hash verificado ✓
 >
-> 1. Hacele doble click al archivo (o arrastralo a Configuración → Extensiones)
+> 1. Abrí el archivo — está en tu carpeta *(o: bajalo con el botón de descarga acá arriba)*
 > 2. Apretá **Instalar**
 > 3. Reiniciá la app por completo — cerrala del todo y volvé a abrirla
 >
