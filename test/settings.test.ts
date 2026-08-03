@@ -96,6 +96,20 @@ test("the CLI exposes home, registry-url and registry-enabled", () => {
   assert.deepEqual(cliKeys.sort(), ["home", "registry-enabled", "registry-url"]);
 });
 
+test("an un-interpolated placeholder is not a value", () => {
+  fresh();
+  // What a host sends when it never expanded the manifest's default: taking it at face
+  // value would make us mkdir a directory literally named "${HOME}".
+  process.env.TOOL_MEMORY_REGISTRY_URL = "${HOME}/.tool-memory";
+  assert.equal(cfg("TOOL_MEMORY_REGISTRY_URL"), undefined);
+  process.env.TOOL_MEMORY_REGISTRY_URL = "${user_config.registry_url}";
+  assert.equal(cfg("TOOL_MEMORY_REGISTRY_URL"), undefined);
+  // A real value that merely contains a dollar sign still comes through.
+  process.env.TOOL_MEMORY_REGISTRY_URL = "https://reg.com/a$b";
+  assert.equal(cfg("TOOL_MEMORY_REGISTRY_URL"), "https://reg.com/a$b");
+  delete process.env.TOOL_MEMORY_REGISTRY_URL;
+});
+
 test("effectiveConfig reports the source of each value", () => {
   fresh();
   setSetting("registry-url", "https://file.com");

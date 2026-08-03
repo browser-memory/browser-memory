@@ -47,9 +47,8 @@
     "home": {
       "type": "directory",
       "title": "Memory folder",
-      "description": "Where your learned tools, index, traces and the dedicated Chrome profile live. Keep the default to share one memory across every client.",
-      "required": false,
-      "default": "${HOME}/.tool-memory"
+      "description": "Where your learned tools, index, traces and the dedicated Chrome profile live. Leave it empty to use ~/.tool-memory, which is what every other client uses — that's how one memory is shared across all of them.",
+      "required": false
     },
     "registry_enabled": {
       "type": "boolean",

@@ -149,17 +149,27 @@ export function clearConfigCache(): void {
 }
 
 /**
+ * True for a value a host meant to interpolate and didn't, e.g. the literal `${HOME}/.tool-memory`
+ * reaching us because the MCPB manifest's default was never expanded. Treating it as a real value
+ * is always wrong: we'd create a directory named `${HOME}`. Unset beats nonsense — the caller's
+ * default is the right answer.
+ */
+function unexpanded(v: string): boolean {
+  return /\$\{[^}]*\}/.test(v);
+}
+
+/**
  * Resolves a value by its env var name, with precedence env → config.json → undefined
  * (the caller applies its own default). config.ts and registry/config.ts use it instead of
  * reading process.env directly.
  */
 export function cfg(env: string): string | undefined {
   const fromEnv = process.env[env];
-  if (fromEnv != null && fromEnv !== "") return fromEnv;
+  if (fromEnv != null && fromEnv !== "" && !unexpanded(fromEnv)) return fromEnv;
   const def = BY_ENV.get(env);
   if (!def) return undefined;
   const v = loadConfigFile()[def.key];
-  return v != null && v !== "" ? v : undefined;
+  return v != null && v !== "" && !unexpanded(v) ? v : undefined;
 }
 
 /** Interprets a boolean-ish value ("0"/"false"/"no"/"off" => false). `dflt` if there's no value. */
