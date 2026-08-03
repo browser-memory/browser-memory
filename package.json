@@ -1,6 +1,6 @@
 {
   "name": "browser-memory",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "description": "Local MCP server that gives an agent a reusable memory of web actions (learn once, replay deterministically).",
   "type": "module",
   "license": "MIT",
@@ -19,6 +19,8 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc && mkdir -p dist/learn && cp src/learn/distill-prompt.md dist/learn/",
+    "bundle": "node scripts/bundle.mjs",
+    "bundle:verify": "node scripts/bundle-verify.mjs",
     "test": "node --test --import tsx \"./test/*.test.ts\"",
     "smoke": "tsx test/smoke.ts",
     "smoke:composite": "tsx test/smoke-composite.ts",
@@ -42,6 +44,7 @@
     "zod": "^3.25.0"
   },
   "devDependencies": {
+    "@anthropic-ai/mcpb": "^2.1.2",
     "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0"

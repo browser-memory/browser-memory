@@ -137,8 +137,17 @@ export async function launchSharedChrome(): Promise<SharedChrome> {
   // Reuse the persistent dedicated profile as-is; only strip the tab-restore noise.
   disableSessionRestore();
 
-  // System Google Chrome if present, else Playwright's bundled chromium.
+  // System Google Chrome if present, else Playwright's bundled chromium. The chromium is
+  // NOT there when we run from the .mcpb bundle (packed with --ignore-scripts, so Playwright
+  // never downloaded a browser) — say what to do instead of failing deep inside Playwright.
   const exe = resolveChromeBinary() ?? chromium.executablePath();
+  if (!existsSync(exe)) {
+    throw new Error(
+      "No browser to launch: Google Chrome is not installed and no bundled Chromium is " +
+        "available. Install Google Chrome (https://google.com/chrome), or point " +
+        "TOOL_MEMORY_CHROME_BIN at an existing Chrome/Chromium binary.",
+    );
+  }
   const args = [
     `--remote-debugging-port=${cdpPort}`,
     `--user-data-dir=${paths.chromeProfile}`,

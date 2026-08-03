@@ -1,0 +1,75 @@
+{
+  "manifest_version": "0.2",
+  "name": "browser-memory",
+  "display_name": "Browser Memory",
+  "version": "0.1.19",
+  "description": "A reusable memory of web actions: learn an action once, replay it deterministically forever.",
+  "long_description": "browser-memory gives an agent a memory of the web actions it already knows how to do. The first time an action is performed on a site it is learned and saved as an executable tool; the next time it is discovered and replayed deterministically, with no model in the loop.\n\nIt drives its own dedicated Chrome (its own persistent profile, its own internal debugging port) — it never touches your real browser. You log into a site by hand once and that session survives every later run.\n\nThe memory lives on disk in ~/.tool-memory and is shared across every client you install this in.",
+  "author": {
+    "name": "browser-memory",
+    "url": "https://browser-memory.com"
+  },
+  "homepage": "https://browser-memory.com",
+  "documentation": "https://browser-memory.com/install.md",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/browser-memory/browser-memory"
+  },
+  "license": "MIT",
+  "keywords": ["browser", "automation", "memory", "playwright", "web"],
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "TOOL_MEMORY_HOME": "${user_config.home}",
+        "TOOL_MEMORY_REGISTRY_ENABLED": "${user_config.registry_enabled}",
+        "TOOL_MEMORY_REGISTRY_URL": "${user_config.registry_url}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "discover", "description": "Search the memory for tools that already solve a goal on a site." },
+    { "name": "run", "description": "Replay a saved tool or composite deterministically and return structured data." },
+    { "name": "request", "description": "Freeze the trace of a new web action so it can be distilled into a reusable tool." },
+    { "name": "save", "description": "Validate and persist a distilled tool." },
+    { "name": "list_sites", "description": "List the sites the memory has tools for." },
+    { "name": "forget_site", "description": "Delete every tool learned for a site." },
+    { "name": "bm_navigate", "description": "Open a URL in the dedicated Chrome." },
+    { "name": "bm_snapshot", "description": "Read the page as an accessibility tree with refs." },
+    { "name": "bm_click", "description": "Click an element by ref." },
+    { "name": "bm_type", "description": "Type into an element by ref." }
+  ],
+  "tools_generated": true,
+  "user_config": {
+    "home": {
+      "type": "directory",
+      "title": "Memory folder",
+      "description": "Where your learned tools, index, traces and the dedicated Chrome profile live. Keep the default to share one memory across every client.",
+      "required": false,
+      "default": "${HOME}/.tool-memory"
+    },
+    "registry_enabled": {
+      "type": "boolean",
+      "title": "Use the shared registry",
+      "description": "Pull community tools from the remote registry. Turn off for a 100% local memory.",
+      "required": false,
+      "default": true
+    },
+    "registry_url": {
+      "type": "string",
+      "title": "Registry URL",
+      "description": "Backend the shared registry points at. Leave as is unless you self-host.",
+      "required": false,
+      "default": "https://api.browser-memory.com"
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "node": ">=20"
+    }
+  }
+}

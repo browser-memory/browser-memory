@@ -1,6 +1,9 @@
 node_modules/
 dist/
 *.log
+# mcpb bundle output (built by `npm run bundle`, published to Releases)
+build/
+*.mcpb
 # secrets / local state — never version
 creds.local.json
 .tool-memory/
@@ -18,3 +21,4 @@ PUBLISH.md
 # external trace tooling (Python) — do not version
 webtrace/
 __pycache__/
+SHA256SUMS
