@@ -77,31 +77,44 @@ it already is, or one extra click, depending on where you run:
   telling them to look for a file they cannot see.
 
 ### B2. Verify it
-Run both of these and compare. This is the only check that counts.
+The published checksum lives here. Use THIS url — the release-asset one redirects to another
+host, and a fetch tool that can't follow that will make you think no checksum exists:
 
-    curl -fsSL https://github.com/browser-memory/browser-memory/releases/latest/download/SHA256SUMS
+    https://raw.githubusercontent.com/browser-memory/browser-memory/main/docs/SHA256SUMS
+
+Compare it against the file you got:
+
     shasum -a 256 ./browser-memory.mcpb          # Windows: certutil -hashfile browser-memory.mcpb SHA256
 
-The two hashes must match, and you must tell the user the hash you got. Do NOT substitute a
-different check: unzipping the bundle and reading its manifest proves it is *a* bundle, not that
-it is *this* bundle, and it is not a verification. If the hashes differ, delete the file and say
-the download was corrupt — do not tell them to install it anyway. If neither hashing command
-exists here, say plainly that you could not verify it instead of implying you did.
+Do NOT substitute a different check: unzipping the bundle and reading its manifest proves it is
+*a* bundle, not that it is *this* bundle. If the hashes differ, delete the file and say the
+download was corrupt — do not tell them to install it anyway. If you truly cannot fetch the
+checksum or cannot hash the file, say so in one short line instead of implying you verified it.
 
 ### B3. Tell the user to install it
-Print this and nothing else, with step 1 matching where the file actually is:
 
-> Listo — `browser-memory.mcpb`, hash verificado ✓
->
-> 1. Abrí el archivo — está en tu carpeta *(o: bajalo con el botón de descarga acá arriba)*
-> 2. Apretá **Instalar**
-> 3. Reiniciá la app por completo — cerrala del todo y volvé a abrirla
->
-> Cuando vuelvas decime "listo" y verifico que quedó andando.
+**Be brief. This is the whole reply** — 6 lines, in the user's language, first line first. No
+preamble, no explaining which route you took or why, no summary of what the tool does, no
+"caveats" section, no security lecture. They asked you to install something, not to brief them.
 
-The install dialog will warn that the developer is not verified by Anthropic. That is expected
-for any extension installed from a file. Do not tell the user to ignore security warnings; just
-confirm it comes from https://browser-memory.com if they ask.
+> `browser-memory.mcpb` — hash verificado ✓
+>
+> 1. Bajá el archivo de acá arriba
+> 2. Doble click → **Instalar**
+> 3. ⌘Q y reabrí Claude (cerrala del todo, no alcanza con la ventana)
+>
+> Avisame cuando esté y lo pruebo.
+
+On the first line put the first 8 characters of the hash you actually computed, so they can see
+you checked something real.
+
+Adjust only what is actually different: step 1 says "abrilo de tu carpeta" when the file is
+already on their machine, and add ONE line if Google Chrome is missing or if you could not
+verify the hash. Nothing else gets added.
+
+The install dialog warns that the developer is not verified by Anthropic — that is normal for any
+extension installed from a file, and the dialog already says it. Don't repeat it, don't tell them
+to ignore it. If they ask, confirm it comes from https://browser-memory.com.
 
 ### B4. After the restart
 When the user says it is done, verify it yourself — do not make them interpret anything:

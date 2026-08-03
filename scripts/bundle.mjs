@@ -121,6 +121,17 @@ step("packing");
 rmSync(OUT, { force: true });
 run("npx", ["mcpb", "pack", STAGE, OUT]);
 
+// The checksum ships IN THE REPO, not only as a release asset: the asset URL 302s to another
+// host and an agent whose fetch can't follow that concludes no checksum exists (it did). The
+// raw.githubusercontent copy is same-host as install.md and answers 200 directly.
+step("writing docs/SHA256SUMS");
+const sha = execFileSync("shasum", ["-a", "256", "browser-memory.mcpb"], {
+  cwd: ROOT,
+  encoding: "utf8",
+});
+writeFileSync(join(ROOT, "docs", "SHA256SUMS"), sha);
+console.log(`  ${sha.trim()}`);
+
 const mb = (statSync(OUT).size / 1024 / 1024).toFixed(1);
 console.log(`\n\x1b[32m✓ ${OUT} — ${mb} MB (v${pkg.version})\x1b[0m`);
 console.log(`  verify:  npm run bundle:verify`);

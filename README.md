@@ -34,6 +34,18 @@ To install into a single host, name it (`codex` · `cursor` · `vscode` · `clau
 npx -y browser-memory install cursor
 ```
 
+### Claude desktop app & Cowork
+
+Those run the agent in a sandbox, where `npx … install` can't reach your machine's config. Paste
+this instead — the agent fetches the doc, downloads the bundle and tells you the two clicks:
+
+```
+Install browser-memory by following https://raw.githubusercontent.com/browser-memory/browser-memory/main/docs/install.md — keep your reply short: only the steps I have to do myself.
+```
+
+Or skip the agent: [download the bundle](https://github.com/browser-memory/browser-memory/releases/latest/download/browser-memory.mcpb),
+double-click it, install, and restart the app. Same result.
+
 ## Disconnect
 
 ```bash

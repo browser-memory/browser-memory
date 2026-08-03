@@ -7,18 +7,24 @@ Claude Cowork, or the Claude desktop app. It is Route B of [install.md](install.
 
 ```bash
 npm version patch                # or edit package.json — bundle.mjs stamps the manifest from it
-npm run bundle                   # → browser-memory.mcpb
+npm run bundle                   # → browser-memory.mcpb, and rewrites docs/SHA256SUMS
 npm run bundle:verify            # speaks real MCP to the packed bundle; must print "bundle is live"
 
-shasum -a 256 browser-memory.mcpb > SHA256SUMS
+git add docs/SHA256SUMS && git commit -m "release vX.Y.Z" && git push   # BEFORE the release
 gh release create "v$(node -p "require('./package.json').version")" \
-  browser-memory.mcpb SHA256SUMS \
+  browser-memory.mcpb docs/SHA256SUMS \
   --title "v$(node -p "require('./package.json').version")" --generate-notes
 ```
 
-`install.md` points at `releases/latest/download/…`, so a new release is picked up with no doc
-change. If you ever want prettier URLs, redirect `browser-memory.com/dl/browser-memory.mcpb`
-there — `curl -fL` follows it.
+**Upload the exact bundle that wrote the checksum, and push `docs/SHA256SUMS` before cutting the
+release.** The zip is not byte-reproducible — entry timestamps differ — so re-running
+`npm run bundle` after a release produces an identical-but-differently-hashed file. Build once,
+then commit and upload from that same build. Mismatch means every install fails verification.
+
+`install.md` points at `releases/latest/download/…` for the bundle, so a new release is picked up
+with no doc change. The **checksum** is read from `raw.githubusercontent.com/…/main/docs/SHA256SUMS`
+instead, because the release-asset URL 302s to another host: an agent whose fetch tool doesn't
+follow cross-host redirects reports that no checksum exists (this happened on a real install).
 
 ## What's in the bundle, and why
 
