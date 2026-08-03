@@ -18,7 +18,16 @@
  * The manifest version is stamped from package.json at pack time so the two can't drift.
  */
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from "node:fs";
+import {
+  cpSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+  existsSync,
+  statSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -30,6 +39,33 @@ const run = (cmd, args, cwd = ROOT) =>
   execFileSync(cmd, args, { cwd, stdio: "inherit", env: process.env });
 
 const step = (msg) => console.log(`\n\x1b[36m▸ ${msg}\x1b[0m`);
+
+/**
+ * Drops every package that declares an `os`/`cpu` restriction it doesn't satisfy everywhere.
+ *
+ * We pack on ONE machine but the bundle must run on all of them, and npm resolves optional
+ * platform-specific deps against the packing machine: building on macOS pulls in Playwright's
+ * optional `fsevents`, a darwin-only .node binary that would ride along to Windows. A package
+ * that restricts its platform is optional by construction (npm skips it elsewhere), so removing
+ * it is exactly what a Windows or Linux install would have done.
+ */
+function pruneNonPortable(modules) {
+  if (!existsSync(modules)) return;
+  for (const name of readdirSync(modules)) {
+    const dir = join(modules, name);
+    if (name.startsWith("@")) {
+      pruneNonPortable(dir); // scope dir: recurse one level
+      continue;
+    }
+    const pkgFile = join(dir, "package.json");
+    if (!existsSync(pkgFile)) continue;
+    const { os, cpu } = JSON.parse(readFileSync(pkgFile, "utf8"));
+    if (Array.isArray(os) || Array.isArray(cpu)) {
+      rmSync(dir, { recursive: true, force: true });
+      console.log(`  dropped ${name} (os=${os ?? "*"} cpu=${cpu ?? "*"})`);
+    }
+  }
+}
 
 const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
 
@@ -71,6 +107,9 @@ writeFileSync(
   ) + "\n",
 );
 rmSync(join(STAGE, "package-lock.json"), { force: true });
+
+step("pruning platform-locked packages");
+pruneNonPortable(join(STAGE, "node_modules"));
 
 step("stamping the manifest");
 const manifest = JSON.parse(readFileSync(join(ROOT, "manifest.json"), "utf8"));
