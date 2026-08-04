@@ -418,16 +418,16 @@ export function needsBlankReset(
 }
 
 /**
- * Replays the call from inside the tab. Navigates ONLY when the worker tab isn't on the
- * site already — which is the whole point of keeping one tab per origin: the common
- * case is a single `evaluate`, no page load, and the session travels with the request
- * because it is same-origin (what `kind: "http"` cannot do from Node).
+ * Warm-up half of a fetch-replay: navigates ONLY when the worker tab isn't on the site
+ * already. Runs under the EXCLUSIVE grade of the origin lock (withOriginPage `prepare`),
+ * because a goto must never race another run on the same tab; on a warm tab it is a
+ * no-op URL check and costs nothing.
  */
-async function runFetchReplay(
+async function ensureFetchReplayOrigin(
   tool: Tool,
   params: Record<string, unknown>,
   page: Page,
-): Promise<unknown> {
+): Promise<void> {
   if (tool.recipe.kind !== "fetch-replay") throw new Error("recipe is not fetch-replay");
   const r = tool.recipe;
   const want = originOf(injectParams(r.origin, params));
@@ -438,8 +438,22 @@ async function runFetchReplay(
       throw new TypedFail("re-auth", `session required at ${page.url()}`);
     }
   }
+}
+
+/**
+ * Evaluate half of a fetch-replay: the common case is JUST this — no page load, and the
+ * session travels with the request because it is same-origin (what `kind: "http"`
+ * cannot do from Node). Runs under the SHARED grade, so N of these against a warm tab
+ * proceed concurrently (the browser parallelizes the in-page fetches).
+ */
+async function evaluateFetchReplay(
+  tool: Tool,
+  params: Record<string, unknown>,
+  page: Page,
+): Promise<unknown> {
+  if (tool.recipe.kind !== "fetch-replay") throw new Error("recipe is not fetch-replay");
   const paramsLiteral = JSON.stringify(params ?? {});
-  return page.evaluate(`(${r.fn})(${paramsLiteral})`);
+  return page.evaluate(`(${tool.recipe.fn})(${paramsLiteral})`);
 }
 
 /**
@@ -516,7 +530,8 @@ export async function run(
   let tool: Tool;
   let remote = false;
   try {
-    // Unified resolution (Option A): local disk → memory cache → remote pull.
+    // Unified resolution (Option A): the server wins — memory cache → remote pull →
+    // local disk only as fallback (404 or server down). See registry/resolve.ts.
     const resolved = await resolveItem(name);
     if (isComposite(resolved.item)) {
       return {
@@ -545,6 +560,10 @@ export async function run(
 
   // Browser path: the worker tab of this origin, reused across runs and LEFT OPEN so
   // the user can keep working on what the tool produced (browser/worker-tabs.ts).
+  // Concurrency: fetch-replay runs take the SHARED grade of the origin lock (their
+  // warm-up goto goes in `prepare`, under the exclusive grade), so parallel read calls
+  // against a warm tab truly overlap; playwright runs are exclusive per origin — a
+  // parallel call queues instead of clobbering the tab (see browser/origin-lock.ts).
   const recipe = tool.recipe;
   try {
     const result = await withOriginPage(
@@ -552,7 +571,7 @@ export async function run(
       async (page) => {
         try {
           if (recipe.kind === "fetch-replay") {
-            const data = await runFetchReplay(tool, params, page);
+            const data = await evaluateFetchReplay(tool, params, page);
             // The fn already returns the data; a json extractor only narrows it.
             const narrowed =
               tool.result_extractor?.type === "json"
@@ -598,7 +617,33 @@ export async function run(
           throw await assistReAuth(page, e);
         }
       },
-      { reset: needsBlankReset(tool, params), focus: wantsFocus },
+      {
+        reset: needsBlankReset(tool, params),
+        focus: wantsFocus,
+        ...(recipe.kind === "fetch-replay"
+          ? {
+              shared: true,
+              // Cheap warm check under the SHARED grade: only a cold tab pays the
+              // exclusive warm-up. Any doubt (bad origin template) says "cold" and
+              // lets `prepare` surface the real error.
+              needsPrepare: (page: Page) => {
+                try {
+                  const want = originOf(injectParams(recipe.origin, params));
+                  return !want || originOf(page.url()) !== want;
+                } catch {
+                  return true;
+                }
+              },
+              prepare: async (page: Page) => {
+                try {
+                  await ensureFetchReplayOrigin(tool, params, page);
+                } catch (e) {
+                  throw await assistReAuth(page, e);
+                }
+              },
+            }
+          : {}),
+      },
     );
 
     stripFocusMarkers(result);

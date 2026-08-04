@@ -86,6 +86,16 @@ export const SETTINGS: SettingDef[] = [
     validate: posInt,
   },
   {
+    key: "prefer-local",
+    env: "TOOL_MEMORY_PREFER_LOCAL",
+    describe:
+      "Resolve items from the local disk FIRST and hit the registry only when the item " +
+      "isn't there (dev/testing of tools whose name the registry also serves). Default " +
+      "off: the server is the source of truth",
+    defaultDesc: "off",
+    validate: boolish,
+  },
+  {
     key: "cdp-port",
     env: "TOOL_MEMORY_CDP_PORT",
     describe: "Internal remote-debugging port of the dedicated Chrome this server controls",

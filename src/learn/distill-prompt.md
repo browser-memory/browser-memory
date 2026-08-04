@@ -78,6 +78,19 @@ over the trace files.
     natural one here (a dom assertion would be checking a page nobody looked at).
 - **Direct Playwright** if none of the above applies (`{ kind: "playwright", steps: [...] }`) with
   the exact selectors from the narration. Default for writes and for anything UI-driven.
+  - **Anti-pattern**: a playwright recipe whose only step is `navigate` plus an extractor that
+    fetches everything itself (never reads the live DOM). That goto is pure cost AND it
+    serializes parallel runs (concurrent gotos on the shared tab abort each other). Write it as
+    a **fetch-replay** instead — same fn in `recipe.fn` — so replays are one `evaluate` and can
+    run concurrently. Even fetching an HTML page and parsing it with `DOMParser` (or reading its
+    embedded `__NEXT_DATA__`/RSC payload) belongs in fetch-replay, not in a navigate+extractor.
+- **Batch param for READ fetch-replay tools**: when the action is a lookup the agent will
+  naturally want many of (searches, product/detail fetches), accept BOTH the scalar param and an
+  array twin (`query`/`queries`, `id`/`ids`) and fan the array out INSIDE the fn with a small
+  concurrency cap (3-4, bot-wall friendly): one call, N same-origin fetches in parallel.
+  Single-scalar calls keep the plain shape; array calls return
+  `{ batch: true, count, <results-key>: [per-item results, same order] }`, and the
+  `success_assertion` should target a field BOTH shapes have (e.g. `count`). Writes never batch.
 
 ### 3. Parameterize
 Replace concrete inputs and handles with params: `search-person(name)`, not

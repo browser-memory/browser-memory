@@ -329,3 +329,23 @@ test("forgetSite of a nonexistent site deletes nothing", () => {
   const res = forgetSite("nonexistent-site");
   assert.deepEqual(res.deleted, []);
 });
+
+test("mergeCandidates: the server wins by default, the local copy wins under prefer-local", async () => {
+  const { mergeCandidates } = await import("../src/memory/discover.ts");
+  const mk = (name: string, source: "local" | "remote", intent: string) =>
+    ({ name, type: "primitive", site: "x.com", intent, params: [], side_effect: "read", source }) as never;
+  const local = [mk("dup", "local", "v5 with queries"), mk("only-local", "local", "l")];
+  const remote = [mk("dup", "remote", "v4 old"), mk("only-remote", "remote", "r")];
+
+  const serverWins = mergeCandidates(local, remote, false);
+  assert.deepEqual(
+    serverWins.map((c: { name: string; intent: string }) => `${c.name}:${c.intent}`).sort(),
+    ["dup:v4 old", "only-local:l", "only-remote:r"],
+  );
+
+  const localWins = mergeCandidates(local, remote, true);
+  assert.deepEqual(
+    localWins.map((c: { name: string; intent: string }) => `${c.name}:${c.intent}`).sort(),
+    ["dup:v5 with queries", "only-local:l", "only-remote:r"],
+  );
+});

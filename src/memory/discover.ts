@@ -87,6 +87,23 @@ export function sortCompositesFirst(list: Candidate[]): Candidate[] {
   );
 }
 
+/**
+ * Merges local and remote candidates, deduping by name. By default the SERVER wins
+ * (curated offering) — but with `prefer-local` on, the local card must win too:
+ * `run` will execute the local item (registry/resolve.ts), so discover has to show the
+ * agent THAT item's contract (intent/params), not the shadowed remote one.
+ */
+export function mergeCandidates(
+  local: Candidate[],
+  remote: Candidate[],
+  preferLocal: boolean,
+): Candidate[] {
+  const winners = preferLocal ? local : remote;
+  const losers = preferLocal ? remote : local;
+  const names = new Set(winners.map((c) => c.name));
+  return sortCompositesFirst([...winners, ...losers.filter((c) => !names.has(c.name))]);
+}
+
 /** Result of forgetting a site: what was deleted from local memory. */
 export interface ForgetResult {
   site: string;

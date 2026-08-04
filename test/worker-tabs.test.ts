@@ -7,8 +7,10 @@ const {
   getWorkerTab,
   isWorkerPage,
   originOf,
+  pinWorkerTab,
   resetWorkerTabs,
   setWorkerTab,
+  unpinWorkerTab,
   workerTabs,
 } = await import("../src/browser/worker-tabs.ts");
 
@@ -82,4 +84,26 @@ test("reusing an origin makes it recent again, so it survives eviction", () => {
 test("nothing is evicted while under the cap", () => {
   setWorkerTab("https://x.com", fakePage());
   assert.deepEqual(evictExcess(), []);
+});
+
+test("a pinned tab is spared by eviction, the next oldest goes instead", () => {
+  const pages = Array.from({ length: MAX_WORKER_TABS + 1 }, () => fakePage());
+  pages.forEach((p, i) => setWorkerTab(`https://s${i}.com`, p));
+
+  pinWorkerTab(pages[0]); // oldest, but busy: a run is using it
+  assert.deepEqual(evictExcess(), [pages[1]], "the oldest UNPINNED goes");
+  assert.equal(getWorkerTab("https://s0.com"), pages[0], "pinned survives");
+});
+
+test("unpinning makes the tab evictable again; pins are refcounted", () => {
+  const pages = Array.from({ length: MAX_WORKER_TABS + 1 }, () => fakePage());
+  pages.forEach((p, i) => setWorkerTab(`https://s${i}.com`, p));
+
+  pinWorkerTab(pages[0]);
+  pinWorkerTab(pages[0]); // two concurrent runs on the same tab
+  unpinWorkerTab(pages[0]);
+  assert.deepEqual(evictExcess(), [pages[1]], "still pinned by the second run");
+  setWorkerTab("https://extra.com", fakePage());
+  unpinWorkerTab(pages[0]);
+  assert.deepEqual(evictExcess(), [pages[0]], "last unpin frees it");
 });

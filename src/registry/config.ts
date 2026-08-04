@@ -29,6 +29,12 @@ export interface RegistryConfig {
   timeoutMs: number;
   /** If false, the remote client doesn't hit the server (100% local mode). */
   enabled: boolean;
+  /**
+   * If true, resolution tries the LOCAL disk before the registry (resolve.ts). For
+   * developing/testing a tool whose name the server also serves — by default the
+   * server wins and a local edit would never run.
+   */
+  preferLocal: boolean;
   installId: string;
   clientVersion: string;
 }
@@ -37,6 +43,7 @@ export const registryConfig: RegistryConfig = {
   baseUrl: (cfg("TOOL_MEMORY_REGISTRY_URL") ?? DEFAULT_REGISTRY_URL).replace(/\/$/, ""),
   timeoutMs: Number(cfg("TOOL_MEMORY_REGISTRY_TIMEOUT_MS") ?? 3000),
   enabled: truthy(cfg("TOOL_MEMORY_REGISTRY_ENABLED"), true),
+  preferLocal: truthy(cfg("TOOL_MEMORY_PREFER_LOCAL"), false),
   installId: getInstallId(),
   clientVersion: readClientVersion(),
 };

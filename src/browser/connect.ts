@@ -7,10 +7,13 @@ import {
   evictExcess,
   getWorkerTab,
   isWorkerPage,
+  pinWorkerTab,
   resetWorkerTabs,
   setWorkerTab,
+  unpinWorkerTab,
   workerTabs,
 } from "./worker-tabs.js";
+import { acquireOrigin } from "./origin-lock.js";
 
 /**
  * Replay driver: it ATTACHES to the shared Chrome via CDP. It does not launch its own
@@ -132,29 +135,90 @@ export async function captureScreenshotsInto(dir: string): Promise<string[]> {
  * `focus` decides — from the result — whether to bring the tab to the front. It is off
  * by default and on purpose: keeping the tab is for everyone, stealing the foreground
  * is only for flows where a human has to look at the screen right now (MANUAL_CONFIRM).
+ *
+ * CONCURRENCY (origin-lock.ts): runs against the same origin share one tab, so they
+ * synchronize through a per-origin RW lock.
+ *   - Default (exclusive): `reset` and `fn` run under the exclusive grade — one run at
+ *     a time per origin. For recipes that navigate or drive the DOM (playwright):
+ *     measured without this, parallel calls killed each other's goto with
+ *     net::ERR_ABORTED.
+ *   - `shared: true` (fetch-replay): `fn` runs under the shared grade, so N evaluates
+ *     against a warm tab proceed at once. `needsPrepare` is consulted under that shared
+ *     grade; only when it says the tab isn't ready (cold tab → warm-up goto pending)
+ *     does the run trade its shared slot for the exclusive grade, run `prepare`, and
+ *     DOWNGRADE back — so the goto never races, and the warm path never waits on an
+ *     exclusive grant (an early version did, and it serialized every parallel read
+ *     behind the previous run's evaluate).
+ * Tab creation is memoized per origin (concurrent cold runs share one newPage), and the
+ * tab is pinned for the whole span so LRU eviction never closes it mid-run.
  */
+const pendingTabs = new Map<string, Promise<Page>>();
+
+async function acquireTab(key: string, context: BrowserContext): Promise<Page> {
+  const existing = getWorkerTab(key);
+  if (existing) return existing;
+  let pending = pendingTabs.get(key);
+  if (!pending) {
+    pending = context
+      .newPage()
+      .then((page) => {
+        setWorkerTab(key, page);
+        return page;
+      })
+      .finally(() => pendingTabs.delete(key));
+    pendingTabs.set(key, pending);
+  }
+  return pending;
+}
+
 export async function withOriginPage<T>(
   origin: string | undefined,
   fn: (page: Page) => Promise<T>,
-  opts: { reset?: boolean; focus?: (result: T) => boolean } = {},
+  opts: {
+    reset?: boolean;
+    focus?: (result: T) => boolean;
+    /** Run `fn` under the shared grade (fetch-replay evaluates). Default exclusive. */
+    shared?: boolean;
+    /** Under `shared`: does the tab still need `prepare`? Checked cheaply, no await. */
+    needsPrepare?: (page: Page) => boolean;
+    /** Warm-up that must not race (cold-tab goto). Runs under the exclusive grade. */
+    prepare?: (page: Page) => Promise<void>;
+  } = {},
 ): Promise<T> {
   const b = await getBrowser();
   const context = b.contexts()[0] ?? (await b.newContext());
   const key = origin ?? UNKNOWN_ORIGIN;
 
-  let page = getWorkerTab(key);
-  if (page) {
-    if (opts.reset) await page.goto("about:blank").catch(() => {});
-  } else {
-    page = await context.newPage();
-  }
-  // Register before evicting: this tab is the most recent, so it is never the victim.
-  setWorkerTab(key, page);
-  for (const stale of evictExcess()) await stale.close().catch(() => {});
+  const page = await acquireTab(key, context);
+  pinWorkerTab(page);
+  try {
+    // Register as most-recently-used before evicting: this tab is never the victim.
+    setWorkerTab(key, page);
+    for (const stale of evictExcess()) await stale.close().catch(() => {});
 
-  const result = await fn(page);
-  if (opts.focus?.(result)) await page.bringToFront().catch(() => {});
-  return result;
+    let hold = await acquireOrigin(key, !opts.shared);
+    try {
+      if (opts.shared && opts.prepare && (opts.needsPrepare?.(page) ?? true)) {
+        // Cold tab: trade the shared slot for the exclusive grade. Never upgrade in
+        // place (two holders upgrading would deadlock): release, re-acquire, re-check.
+        hold.release();
+        hold = await acquireOrigin(key, true);
+        if (opts.needsPrepare?.(page) ?? true) await opts.prepare(page);
+        hold.downgrade(); // back to shared for fn, with no gap for another goto
+      } else if (!opts.shared) {
+        if (opts.reset) await page.goto("about:blank").catch(() => {});
+        await opts.prepare?.(page);
+      }
+
+      const result = await fn(page);
+      if (opts.focus?.(result)) await page.bringToFront().catch(() => {});
+      return result;
+    } finally {
+      hold.release();
+    }
+  } finally {
+    unpinWorkerTab(page);
+  }
 }
 
 export async function disconnectReplay(): Promise<void> {

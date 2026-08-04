@@ -31,6 +31,24 @@ type Tagged = Page & { __bmWorkerOrigin?: string };
 /** origin → live tab. Insertion order is LRU order (least recent first). */
 const tabs = new Map<string, Page>();
 
+/**
+ * Tabs with a run IN FLIGHT (refcount). Eviction must skip them: with enough origins
+ * running at once, the LRU tab can belong to a run that is still using it, and closing
+ * it would kill that run mid-flight. Pinned tabs are spared and become evictable again
+ * as soon as their last run unpins.
+ */
+const pins = new Map<Page, number>();
+
+export function pinWorkerTab(page: Page): void {
+  pins.set(page, (pins.get(page) ?? 0) + 1);
+}
+
+export function unpinWorkerTab(page: Page): void {
+  const n = (pins.get(page) ?? 0) - 1;
+  if (n <= 0) pins.delete(page);
+  else pins.set(page, n);
+}
+
 /** "https://x.com/a?b=1" → "https://x.com". Undefined if it isn't a usable URL. */
 export function originOf(url: string | undefined | null): string | undefined {
   if (!url) return undefined;
@@ -77,13 +95,21 @@ export function setWorkerTab(origin: string, page: Page): void {
  * most recent one, so it is never in the returned list.
  */
 export function evictExcess(): Page[] {
-  for (const [origin, page] of [...tabs]) if (!alive(page)) tabs.delete(origin);
+  for (const [origin, page] of [...tabs]) {
+    if (!alive(page)) {
+      tabs.delete(origin);
+      pins.delete(page!);
+    }
+  }
   const evicted: Page[] = [];
-  while (tabs.size > MAX_WORKER_TABS) {
-    const oldest = tabs.keys().next();
-    if (oldest.done) break;
-    const page = tabs.get(oldest.value);
-    tabs.delete(oldest.value);
+  let excess = tabs.size - MAX_WORKER_TABS;
+  for (const [origin, page] of [...tabs]) {
+    if (excess <= 0) break;
+    // Busy tabs are spared (see `pins`): better to briefly exceed the cap than to
+    // close a tab out from under a run.
+    if (pins.has(page)) continue;
+    tabs.delete(origin);
+    excess -= 1;
     if (alive(page)) evicted.push(page);
   }
   return evicted;
@@ -97,4 +123,5 @@ export function workerTabs(): Page[] {
 /** Forgets every tab (does not close them). For shutdown and for tests. */
 export function resetWorkerTabs(): void {
   tabs.clear();
+  pins.clear();
 }

@@ -2,6 +2,7 @@ import { loadItem } from "../memory/store.js";
 import { isComposite, type MemoryItem } from "../schema/tool.js";
 import { getCached, setCached } from "./cache.js";
 import { fetchRemoteTool } from "./client.js";
+import { registryConfig } from "./config.js";
 import { logEvent } from "./log.js";
 
 /**
@@ -10,6 +11,8 @@ import { logEvent } from "./log.js";
  *   1. memory cache  → source "remote-cache" (already pulled in this process; doesn't re-hit the server)
  *   2. remote pull   → source "remote-pull"  (pulls, VALIDATES, caches in memory; NEVER to disk)
  *   3. local disk    → source "local"        (fallback: only if the server doesn't have it)
+ * Dev exception: with `prefer-local` on (settings.ts), step 3 moves FIRST — for testing
+ * a local edit of a tool the server also serves, which the default order would shadow.
  * If it's nowhere, it throws with the SAME message as store.loadItem to preserve the
  * runner's `not-applicable` contract.
  *
@@ -37,6 +40,18 @@ export function isRemoteSource(s: ResolveSource): boolean {
 }
 
 export async function resolveItem(name: string): Promise<Resolved> {
+  // 0. Dev override (`prefer-local` / TOOL_MEMORY_PREFER_LOCAL): the local disk wins.
+  //    Without it, a locally edited tool whose name the server also serves would NEVER
+  //    run — the registry copy shadows it. The registry stays available as fallback
+  //    for everything not on disk.
+  if (registryConfig.preferLocal) {
+    try {
+      return { item: loadItem(name), source: "local" };
+    } catch {
+      // not local: continue with the normal server-first order.
+    }
+  }
+
   // 1. In-memory cache (already pulled from the server in this process).
   const cached = getCached(name);
   if (cached) return { item: cached, source: "remote-cache" };

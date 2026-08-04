@@ -16,12 +16,13 @@ import { paths } from "./config.js";
 import {
   discover,
   matchRemoteSites,
-  sortCompositesFirst,
+  mergeCandidates,
   listSites,
   mergeSites,
   forgetSite,
   type Candidate,
 } from "./memory/discover.js";
+import { registryConfig } from "./registry/config.js";
 import { loadItem, saveItem, removeItem } from "./memory/store.js";
 import { isComposite } from "./schema/tool.js";
 import { run, type RunResult } from "./runner/execute.js";
@@ -84,6 +85,13 @@ ALWAYS FOLLOW this loop when a task involves operating a website:
      AGAIN. Do NOT re-learn, the tool is fine.
    - not-applicable → doesn't apply (no permission / doesn't exist): report and stop.
    - tool-broken → selector/API changed: re-learn from a fresh trace.
+
+PARALLELIZE reads. \`run\` calls of READ tools are safe to issue CONCURRENTLY (same
+site or different sites): the server queues what must not race and overlaps the rest,
+so N searches cost ~the slowest one, not the sum. Prefer, in order: (1) a tool's own
+batch param when its intent mentions one (e.g. \`queries\`/\`asins\` instead of
+\`query\`/\`asin\` — one call, fanned out in-page), (2) parallel run calls in one
+message. Keep WRITE runs (side_effect write-*) sequential, one at a time.
 
 The tab a run used STAYS OPEN on the page the tool ended on, one per site, so the user
 can keep working there (the profile you opened, the cart you filled). Mention it when
@@ -214,25 +222,23 @@ server.tool(
     //    Either way we go on with the LOCAL tools: discover never returns empty-handed over auth.
     const { remote, notice } = await remoteCandidatesSafe(sites);
 
-    const remoteNames = new Set(remote.map((e) => e.name));
+    // 2. local candidates, enriched with the real params by reading the item
+    //    (requires.params or params). Dedup against remote happens in mergeCandidates:
+    //    the server wins by default, the local copy wins under `prefer-local` (it is
+    //    what `run` will execute, so its contract is the one the agent must see).
+    const local: Candidate[] = discover(sites).map((c) => {
+      try {
+        const item = loadItem(c.name);
+        const params = isComposite(item)
+          ? Object.keys(item.params)
+          : Object.keys(item.requires.params);
+        return { ...c, params };
+      } catch {
+        return c;
+      }
+    });
 
-    // 2. local: ONLY the ones the server doesn't have. Dedup by name: the server WINS.
-    //    We enrich the real params by reading the item (requires.params or params).
-    const local: Candidate[] = discover(sites)
-      .filter((c) => !remoteNames.has(c.name))
-      .map((c) => {
-        try {
-          const item = loadItem(c.name);
-          const params = isComposite(item)
-            ? Object.keys(item.params)
-            : Object.keys(item.requires.params);
-          return { ...c, params };
-        } catch {
-          return c;
-        }
-      });
-
-    const candidates = sortCompositesFirst([...remote, ...local]);
+    const candidates = mergeCandidates(local, remote, registryConfig.preferLocal);
 
     // "someone wanted to do something and there's no tool (neither local nor remote)": signal of unmet demand.
     if (candidates.length === 0) {
@@ -310,7 +316,9 @@ server.tool(
   "Runs a tool from memory deterministically (no model in the loop) and " +
     "returns structured DATA. It checks environment preconditions and the " +
     "success_assertion. The tab it used is LEFT OPEN on the resulting page (one per " +
-    "site) for the user to keep working on. Typed errors: re-auth (retryable — the " +
+    "site) for the user to keep working on. READ tools may be called in PARALLEL " +
+    "(and some take a batch param — queries/asins — for many lookups in one call); " +
+    "keep write runs sequential. Typed errors: re-auth (retryable — the " +
     "login tab is already open and focused: ask the user to log in and call run " +
     "again), not-applicable (doesn't apply), tool-broken (re-learn with request).",
   {
