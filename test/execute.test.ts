@@ -1,8 +1,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const { injectParams, skipOptionalStep, toolOrigin, needsBlankReset, wantsFocus } =
-  await import("../src/runner/execute.ts");
+const {
+  injectParams,
+  skipOptionalStep,
+  toolOrigin,
+  needsBlankReset,
+  wantsFocus,
+  requiresSession,
+  looksLikeSessionRedirect,
+} = await import("../src/runner/execute.ts");
 const { parseTool } = await import("../src/schema/tool.ts");
 
 const base = {
@@ -148,4 +155,55 @@ test("wantsFocus honours both the new marker and the legacy _keep_page", () => {
   assert.equal(wantsFocus({ data: 1 }), false);
   assert.equal(wantsFocus(null), false);
   assert.equal(wantsFocus("x"), false);
+});
+
+// --- session-failure upgrade -----------------------------------------------------
+
+const cotoLike = (env: Record<string, string>) =>
+  playwrightTool(
+    [{ action: "navigate", url: "https://www.cotodigital.com.ar/sitios/cdigi/nuevositio" }],
+    { site: "cotodigital.com.ar", requires: { params: {}, env } },
+  );
+
+test("requiresSession reads the session precondition from requires.env", () => {
+  assert.equal(requiresSession(cotoLike({ session: "logged-in Coto Digital session" })), true);
+  assert.equal(requiresSession(cotoLike({ auth: "needs login" })), true);
+  assert.equal(requiresSession(cotoLike({})), false);
+  assert.equal(requiresSession(cotoLike({ store: "a store must be selected" })), false);
+});
+
+test("looksLikeSessionRedirect: bounced to another site with a session requirement", () => {
+  const tool = cotoLike({ session: "logged-in Coto Digital session" });
+  // Coto's logged-out pattern: cotodigital.com.ar redirects to coto.com.ar.
+  assert.equal(looksLikeSessionRedirect(tool, {}, "https://www.coto.com.ar/"), true);
+});
+
+test("looksLikeSessionRedirect: a login URL counts even on the same site", () => {
+  const tool = cotoLike({ session: "logged-in" });
+  assert.equal(
+    looksLikeSessionRedirect(tool, {}, "https://www.cotodigital.com.ar/login?next=/x"),
+    true,
+  );
+});
+
+test("looksLikeSessionRedirect: staying on the tool's site is NOT a session redirect", () => {
+  const tool = cotoLike({ session: "logged-in" });
+  assert.equal(
+    looksLikeSessionRedirect(tool, {}, "https://www.cotodigital.com.ar/sitios/cdigi"),
+    false,
+  );
+});
+
+test("looksLikeSessionRedirect: a leading www never makes two origins differ", () => {
+  // site fallback has no www; the live page does. Same site → no redirect.
+  const tool = playwrightTool([{ action: "click", selector: ".x" }], {
+    site: "cotodigital.com.ar",
+    requires: { params: {}, env: { session: "logged-in" } },
+  });
+  assert.equal(looksLikeSessionRedirect(tool, {}, "https://www.cotodigital.com.ar/"), false);
+});
+
+test("looksLikeSessionRedirect: without a session requirement it never fires", () => {
+  const tool = cotoLike({});
+  assert.equal(looksLikeSessionRedirect(tool, {}, "https://www.coto.com.ar/"), false);
 });

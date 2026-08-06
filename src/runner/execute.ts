@@ -93,6 +93,79 @@ function looksLikeLogin(url: string): boolean {
   return /\/(login|signin|sign-in|auth|sso)(\b|\/|\?)/i.test(url);
 }
 
+// --- session-failure upgrade -------------------------------------------------------
+
+/** Matches the way distillers describe a session precondition in `requires.env`. */
+const SESSION_ENV_RE = /session|log[- ]?in|logged|auth|signed[- ]?in/i;
+
+/** Does the tool declare a logged-in session as an environment precondition? */
+export function requiresSession(tool: Tool): boolean {
+  return Object.entries(tool.requires.env ?? {}).some(
+    ([key, desc]) => SESSION_ENV_RE.test(key) || SESSION_ENV_RE.test(desc),
+  );
+}
+
+/** "https://www.x.com" → "x.com": ignore scheme + a leading www when comparing sites. */
+function hostKey(origin: string | undefined): string | undefined {
+  if (!origin) return undefined;
+  try {
+    return new URL(origin).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Environment signal that a SESSION failure hid behind a generic error: the tool
+ * declares a session precondition and the page did not stay where the recipe pointed
+ * it — it sits on a login URL, or it was bounced to a DIFFERENT site (Coto's pattern:
+ * logged out, cotodigital.com.ar redirects to coto.com.ar and the extractor's
+ * same-site fetch dies cross-origin as a bare "Failed to fetch"). It only inspects
+ * declared metadata + URLs, so a tool without a session requirement is never touched.
+ */
+export function looksLikeSessionRedirect(
+  tool: Tool,
+  params: Record<string, unknown>,
+  pageUrl: string,
+): boolean {
+  if (!requiresSession(tool)) return false;
+  if (looksLikeLogin(pageUrl)) return true;
+  const wanted = hostKey(toolOrigin(tool, params));
+  const landed = hostKey(originOf(pageUrl));
+  return Boolean(wanted && landed && wanted !== landed);
+}
+
+/**
+ * Upgrades a failure to `re-auth` when the environment says the session is the real
+ * culprit. tool-broken (and raw Playwright/extractor errors) are the runner BLAMING
+ * THE TOOL; if the page shows a session redirect that blame is wrong — the tool never
+ * got to run against the page it was written for — and calling it broken sends the
+ * agent to re-learn a healthy tool and inflates fail_count. `not-applicable` and
+ * genuine `re-auth` pass through untouched: they already blame the environment.
+ */
+function upgradeSessionFailure(
+  tool: Tool,
+  params: Record<string, unknown>,
+  page: Page,
+  e: unknown,
+): unknown {
+  if (e instanceof TypedFail && e.mode !== "tool-broken") return e;
+  let url = "";
+  try {
+    url = page.url();
+  } catch {
+    return e; // page gone: no environment to read, keep the original blame
+  }
+  if (!looksLikeSessionRedirect(tool, params, url)) return e;
+  const cause = e instanceof Error ? e.message : String(e);
+  return new TypedFail(
+    "re-auth",
+    `session required: this tool needs a logged-in session and the site sent the tab ` +
+      `to ${url} instead of ${toolOrigin(tool, params)} (typical logged-out redirect). ` +
+      `Underlying error: ${cause}`,
+  );
+}
+
 // --- recipe execution ------------------------------------------------------------
 
 async function runPlaywrightStep(
@@ -614,7 +687,7 @@ export async function run(
             : { ok: true };
           return data;
         } catch (e) {
-          throw await assistReAuth(page, e);
+          throw await assistReAuth(page, upgradeSessionFailure(tool, params, page, e));
         }
       },
       {
@@ -638,7 +711,7 @@ export async function run(
                 try {
                   await ensureFetchReplayOrigin(tool, params, page);
                 } catch (e) {
-                  throw await assistReAuth(page, e);
+                  throw await assistReAuth(page, upgradeSessionFailure(tool, params, page, e));
                 }
               },
             }
