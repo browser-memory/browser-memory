@@ -9,6 +9,8 @@ const {
   wantsFocus,
   requiresSession,
   looksLikeSessionRedirect,
+  isNavigationRace,
+  evaluateFetchReplay,
 } = await import("../src/runner/execute.ts");
 const { parseTool } = await import("../src/schema/tool.ts");
 
@@ -110,6 +112,78 @@ test("toolOrigin uses the declared origin of a fetch-replay recipe", () => {
     },
   });
   assert.equal(toolOrigin(tool, {}), "https://www.linkedin.com");
+});
+
+// --- fetch-replay: a navigation that races the evaluate --------------------------
+
+const fetchTool = (extra: Record<string, unknown> = {}) =>
+  parseTool({
+    ...base,
+    ...extra,
+    success_assertion: { type: "json", jsonPath: "count" },
+    recipe: {
+      kind: "fetch-replay",
+      origin: "https://www.doordash.com",
+      fn: "async () => ({ count: 1 })",
+    },
+  });
+
+/** Minimal Page double: fails the first N evaluates with `err`, then returns `value`. */
+const flakyPage = (failures: number, err: string, value: unknown = { count: 1 }) => {
+  const page = {
+    calls: 0,
+    waited: 0,
+    async evaluate() {
+      page.calls++;
+      if (page.calls <= failures) throw new Error(err);
+      return value;
+    },
+    async waitForLoadState() {
+      page.waited++;
+    },
+  };
+  return page;
+};
+
+test("isNavigationRace only matches a destroyed execution context", () => {
+  assert.equal(
+    isNavigationRace(
+      new Error("page.evaluate: Execution context was destroyed, most likely because of a navigation"),
+    ),
+    true,
+  );
+  assert.equal(isNavigationRace(new Error("Cannot find context with specified id")), true);
+  assert.equal(isNavigationRace(new Error("Timeout 30000ms exceeded")), false);
+  assert.equal(isNavigationRace(new Error("Target page, context or browser has been closed")), false);
+});
+
+test("evaluateFetchReplay retries a read once when a navigation destroyed the context", async () => {
+  const page = flakyPage(1, "Execution context was destroyed, most likely because of a navigation");
+  const out = await evaluateFetchReplay(fetchTool(), {}, page as never);
+  assert.deepEqual(out, { count: 1 });
+  assert.equal(page.calls, 2);
+  assert.equal(page.waited, 1);
+});
+
+test("evaluateFetchReplay retries ONCE, then gives up", async () => {
+  const page = flakyPage(2, "Execution context was destroyed, most likely because of a navigation");
+  await assert.rejects(() => evaluateFetchReplay(fetchTool(), {}, page as never), /destroyed/);
+  assert.equal(page.calls, 2);
+});
+
+test("evaluateFetchReplay never retries a write: the effect may already have landed", async () => {
+  const page = flakyPage(1, "Execution context was destroyed, most likely because of a navigation");
+  await assert.rejects(
+    () => evaluateFetchReplay(fetchTool({ side_effect: "write-reversible" }), {}, page as never),
+    /destroyed/,
+  );
+  assert.equal(page.calls, 1);
+});
+
+test("evaluateFetchReplay does not retry an ordinary failure", async () => {
+  const page = flakyPage(1, "TypeError: fetch failed");
+  await assert.rejects(() => evaluateFetchReplay(fetchTool(), {}, page as never), /fetch failed/);
+  assert.equal(page.calls, 1);
 });
 
 test("needsBlankReset: a recipe that navigates first resets by itself", () => {

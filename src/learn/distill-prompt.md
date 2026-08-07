@@ -69,6 +69,10 @@ over the trace files.
   ```
   - `origin` ← the site's origin. `url` ← optional, the page to land on when the tab isn't on
     the site yet (defaults to `origin`); pick one that is cheap and already authenticated.
+    Give it the URL the browser **settles on**, not the one you typed: if the entry page
+    redirects a beat after load (`doordash.com` → `doordash.com/home`), that late navigation
+    destroys the execution context of the `evaluate` that just started — which shows up as an
+    intermittent "Execution context was destroyed", typically only on the slow (batched) calls.
   - `fn` ← an **async** function called as `(params)` in the page. Same rules as an extractor:
     read inputs from `params.<name>` (never as a free variable), no `eval`/`Function` (CSP),
     and use **relative** URLs so the call stays same-origin. Return the data, or `null` on
@@ -121,6 +125,12 @@ Replace concrete inputs and handles with params: `search-person(name)`, not
 ### 4. Define each tool's contract
 - `requires.params` (data) and `requires.env` (environment: auth, etc.).
 - `provides.result` (shape of the data it returns).
+  - **Name a display string as a display string.** When a site gives you both a number and the
+    text it renders, return the number under the plain name (`priceAmount`, `count`) and suffix
+    the text with `Text` (`priceText`, `deliveryFeeText`). Card text lies in ways a number
+    doesn't: a price line can read `"2 for $12.95"` and a fee line can be a promo banner that is
+    identical on every result. A field called `price` holding `"2 for $12.95"` will be read as a
+    number by whoever calls the tool next — say so in `provides` too.
 - `success_assertion` — **MANDATORY**. A deterministic, cheap check that confirms success.
   Valid forms (choose one):
   - `{ "type": "dom", "expr": "<CSS selector>" }` — **preferred**: success = the element exists.

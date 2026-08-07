@@ -514,19 +514,50 @@ async function ensureFetchReplayOrigin(
 }
 
 /**
+ * A navigation tore the document down *while* the in-page fn was running, so the
+ * evaluate lost its execution context. It says nothing about the tool: the usual cause
+ * is the site redirecting a moment after the warm-up `goto` (doordash.com → /home),
+ * which kills a long fetch (a batch) and spares a short one — i.e. a flaky failure that
+ * looks like `tool-broken` but isn't.
+ */
+export function isNavigationRace(e: unknown): boolean {
+  const msg = String((e as Error)?.message ?? e ?? "");
+  return (
+    /Execution context was destroyed/i.test(msg) ||
+    /Cannot find context with specified id/i.test(msg) ||
+    /Execution context is not available in detached frame/i.test(msg)
+  );
+}
+
+/**
  * Evaluate half of a fetch-replay: the common case is JUST this — no page load, and the
  * session travels with the request because it is same-origin (what `kind: "http"`
  * cannot do from Node). Runs under the SHARED grade, so N of these against a warm tab
  * proceed concurrently (the browser parallelizes the in-page fetches).
+ *
+ * Retries ONCE on a navigation race (see `isNavigationRace`), and only for `read` tools —
+ * a write may already have landed before the context died, so re-running it could double
+ * the effect. The retry waits for the new document and re-evaluates on it; it never
+ * navigates, because a `goto` here would run under the SHARED grade and could clobber a
+ * run that is overlapping on the same tab.
  */
-async function evaluateFetchReplay(
+export async function evaluateFetchReplay(
   tool: Tool,
   params: Record<string, unknown>,
   page: Page,
 ): Promise<unknown> {
   if (tool.recipe.kind !== "fetch-replay") throw new Error("recipe is not fetch-replay");
   const paramsLiteral = JSON.stringify(params ?? {});
-  return page.evaluate(`(${tool.recipe.fn})(${paramsLiteral})`);
+  const expr = `(${tool.recipe.fn})(${paramsLiteral})`;
+  try {
+    return await page.evaluate(expr);
+  } catch (e) {
+    if (tool.side_effect !== "read" || !isNavigationRace(e)) throw e;
+    await page
+      .waitForLoadState("domcontentloaded", { timeout: DEFAULT_TIMEOUT })
+      .catch(() => {});
+    return await page.evaluate(expr);
+  }
 }
 
 /**
