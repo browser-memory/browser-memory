@@ -59,6 +59,12 @@ function httpUrl(v: string): string | null {
 function nonEmpty(v: string): string | null {
   return v.trim() ? null : "the value cannot be empty";
 }
+function oneOf(...allowed: string[]): (v: string) => string | null {
+  return (v) =>
+    allowed.includes(v.toLowerCase())
+      ? null
+      : `invalid value: "${v}" (use ${allowed.join(" / ")})`;
+}
 
 /** Single catalog of configurable settings. It's the source of truth for the CLI and for `cfg()`. */
 export const SETTINGS: SettingDef[] = [
@@ -94,6 +100,18 @@ export const SETTINGS: SettingDef[] = [
       "off: the server is the source of truth",
     defaultDesc: "off",
     validate: boolish,
+  },
+  {
+    key: "request-report",
+    env: "TOOL_MEMORY_REQUEST_REPORT",
+    describe:
+      "What `request` sends to the registry when you did a web action there was no tool " +
+      "for: full = goal + steps + the recorded xhr/fetch calls (with their bodies, " +
+      "secrets already redacted) so the tool can be built from it; metadata = the same " +
+      "without any body; off = nothing leaves the machine (the trace still lands on disk)",
+    defaultDesc: "full",
+    validate: oneOf("full", "metadata", "off"),
+    cli: true,
   },
   {
     key: "cdp-port",

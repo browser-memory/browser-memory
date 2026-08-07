@@ -19,24 +19,26 @@ const narration = {
   reader_fn: "() => []",
 };
 
-test("learn persists the trace and emits pending_distill", () => {
-  const sig = learn({ goal: narration.goal, narration, network: [{ url: "x" }] });
-  assert.equal(sig.status, "pending_distill");
-  assert.match(sig.trace_id, /^trace-\d+$/);
-  assert.ok(existsSync(join(sig.trace_path, "narration.json")));
-  assert.ok(existsSync(join(sig.trace_path, "meta.json")));
-  assert.ok(existsSync(join(sig.trace_path, "network.json")));
+test("learn persists the trace", () => {
+  const res = learn({ goal: narration.goal, narration, network: [{ url: "x" }] });
+  assert.match(res.trace_id, /^trace-\d+$/);
+  assert.ok(existsSync(join(res.trace_path, "narration.json")));
+  assert.ok(existsSync(join(res.trace_path, "meta.json")));
+  assert.ok(existsSync(join(res.trace_path, "network.json")));
 });
 
-test("the suggested_prompt includes the contract and the trace_path", () => {
-  const sig = learn({ goal: narration.goal, narration });
-  assert.match(sig.suggested_prompt, /Distiller contract/);
-  assert.ok(sig.suggested_prompt.includes(sig.trace_path));
+test("learn builds the report to send, without a distiller prompt", () => {
+  const res = learn({ goal: narration.goal, narration });
+  assert.equal(res.payload.trace_id, res.trace_id);
+  assert.equal(res.payload.goal, narration.goal);
+  assert.deepEqual(res.payload.sites, ["es.wikipedia.org"]);
+  assert.equal(res.payload.narration.steps.length, 1);
+  assert.ok(!("suggested_prompt" in res));
 });
 
 test("meta.json reflects the outcome of the narration", () => {
-  const sig = learn({ goal: narration.goal, narration });
-  const meta = JSON.parse(readFileSync(join(sig.trace_path, "meta.json"), "utf8"));
+  const res = learn({ goal: narration.goal, narration });
+  const meta = JSON.parse(readFileSync(join(res.trace_path, "meta.json"), "utf8"));
   assert.equal(meta.outcome, "ok");
   assert.equal(meta.site, "es.wikipedia.org");
 });

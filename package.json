@@ -18,7 +18,7 @@
   },
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc && mkdir -p dist/learn && cp src/learn/distill-prompt.md dist/learn/",
+    "build": "tsc",
     "bundle": "node scripts/bundle.mjs",
     "bundle:verify": "node scripts/bundle-verify.mjs",
     "test": "node --test --import tsx \"./test/*.test.ts\"",
@@ -28,6 +28,7 @@
     "smoke:explore": "tsx test/smoke-explore.ts",
     "smoke:explore:loop": "TOOL_MEMORY_REGISTRY_ENABLED=0 tsx test/smoke-explore-loop.ts",
     "e2e:remote": "tsx test/e2e-remote.ts",
+    "e2e:request": "tsx test/e2e-request.ts",
     "verify:netlog": "tsx test/verify-netlog.ts",
     "inspect": "DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector npx tsx src/index.ts",
     "inspect:dist": "npm run build && DANGEROUSLY_OMIT_AUTH=true npx @modelcontextprotocol/inspector node dist/index.js",

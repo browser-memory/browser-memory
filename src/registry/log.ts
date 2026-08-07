@@ -77,6 +77,8 @@ export type UsageEventInput =
   | {
       event_type: "discover_miss";
       sites: string[];
+      /** What was being attempted. Only signal we get when the exploration never reaches `request`. */
+      goal?: string;
       meta?: Record<string, unknown>;
     };
 

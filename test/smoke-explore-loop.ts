@@ -123,7 +123,14 @@ async function main() {
     console: getConsoleLog(),
   });
   tracePath = signal.trace_path;
-  if (signal.status !== "pending_distill") throw new Error(`unexpected status: ${signal.status}`);
+  // the trace is frozen locally and the report is built from it; the POST itself is not
+  // exercised here (this smoke runs with the registry off).
+  if (signal.payload.trace_id !== signal.trace_id) {
+    throw new Error(`the report does not point at the trace: ${JSON.stringify(signal.payload)}`);
+  }
+  if (signal.payload.network.length === 0) {
+    throw new Error("the report carries no xhr/fetch call");
+  }
   const netFile = join(signal.trace_path, "network.json");
   if (!existsSync(netFile)) throw new Error("network.json was not written to the trace");
   const persisted = JSON.parse(readFileSync(netFile, "utf8"));

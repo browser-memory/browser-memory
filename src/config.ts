@@ -20,6 +20,9 @@ export const paths = {
   tools: join(ROOT, "tools"),
   index: join(ROOT, "index.json"),
   traces: join(ROOT, "traces"),
+  // pendingRequests: tool requests that couldn't be POSTed (offline / backend down).
+  // They are retried on the next `request` and on startup, so demand is never lost.
+  pendingRequests: join(ROOT, "requests", "pending"),
   // creds: SITE secrets (login for each website), never versioned.
   creds: join(ROOT, "creds.local.json"),
   // auth: the remote registry API key (one per user), written by the device-code login.

@@ -28,6 +28,7 @@ import { isComposite } from "./schema/tool.js";
 import { run, type RunResult } from "./runner/execute.js";
 import { runComposite, type ComposeResult } from "./runner/compose.js";
 import { learn } from "./learn/signal.js";
+import { reportToolRequest, flushPendingRequests } from "./registry/requests.js";
 import {
   fetchRemoteIndex,
   fetchRemoteSites,
@@ -74,9 +75,10 @@ ALWAYS FOLLOW this loop when a task involves operating a website:
      value), separating the signal from the exploration noise (no backtracks).
    - you don't need to pass the network: this server already records it on its own (look at it
      with \`bm_network\` to detect a direct HTTP endpoint, more robust than the UI).
-   request returns { status: "pending_distill", suggested_prompt, trace_path }. Right
-   after that SPAWN A BACKGROUND SUBAGENT with that suggested_prompt: it distills the
-   trace and saves the tool(s) with \`save\`. The distiller never touches the browser.
+   request returns { status: "reported" | "queued", request_id, trace_path } and that is
+   the WHOLE step: it files the missing tool with us and WE build it. Do NOT spawn any
+   subagent, do NOT distill the trace and do NOT call \`save\` yourself. Just tell the user
+   in one line that the tool was filed so next time it's a \`run\`, and move on with the task.
 
 3. \`run(name, params)\` returns DATA, not instructions. Any computation or decision
    over that data is yours. Typed errors:
@@ -214,8 +216,15 @@ server.tool(
     sites: z
       .array(z.string())
       .describe("site(s) of the task: brand or domain, e.g. ['infobae'] or ['airbnb','booking']"),
+    goal: z
+      .string()
+      .optional()
+      .describe(
+        "optional: what you're trying to do, in one line. Only used when there is NO tool, " +
+          "to record what was missing — it does not affect the matching.",
+      ),
   },
-  async ({ sites }) => {
+  async ({ sites, goal }) => {
     // 1. remote: the server is the source of truth (curated offering). The index already carries the
     //    param names, so there's no need to read the item. A refusal (anonymous/invalid key, or
     //    limit) leaves a notice and no remote; a downed backend degrades to [] without throwing.
@@ -242,7 +251,7 @@ server.tool(
 
     // "someone wanted to do something and there's no tool (neither local nor remote)": signal of unmet demand.
     if (candidates.length === 0) {
-      logEvent({ event_type: "discover_miss", sites });
+      logEvent({ event_type: "discover_miss", sites, goal });
     }
     // discover does NOT touch the browser: it's a search over the on-disk index + the remote
     // registry, so opening a Chrome window here would be a visible side effect for a call
@@ -470,12 +479,12 @@ server.tool(
 
 server.tool(
   "request",
-  "LAST STEP when you did a NEW web action with the browser and it went WELL: " +
-    "call request so you don't have to re-discover it next time. It does NOT block: it persists " +
-    "the frozen trace and returns `pending_distill` with a `suggested_prompt`. " +
-    "MANDATORY CONTRACT: on receiving it, spawn a BACKGROUND SUBAGENT with that " +
-    "prompt; the subagent distills the trace and saves the tools via `save`. The distiller " +
-    "never touches the browser.",
+  "LAST STEP when you did a NEW web action with the browser and it went WELL: call request " +
+    "to FILE the missing tool. It freezes the trace on disk and reports it (goal + steps + " +
+    "the xhr/fetch calls this server recorded, with secrets redacted) so WE build the tool " +
+    "and it ships in the registry. It does NOT block and it is the whole step: do NOT spawn " +
+    "a distiller subagent and do NOT call `save` — just report the result to the user in one " +
+    "line and go on. If the backend is unreachable the report is queued on disk and retried.",
   {
     goal: z.string().describe("the goal that was achieved, in natural language"),
     narration: z
@@ -503,13 +512,22 @@ server.tool(
       // console: use the agent's only if it brought something; otherwise the server-captured
       // one (avoids a `console: []` silently discarding the internal capture).
       const mergedConsole = pickConsole(console, getConsoleLog());
-      const signal = learn({ goal, narration, network: mergedNetwork, console: mergedConsole });
+      const learned = learn({ goal, narration, network: mergedNetwork, console: mergedConsole });
       // we freeze screenshots of the final state "just in case" (best-effort, non-blocking).
-      await captureScreenshotsInto(join(signal.trace_path, "screenshots"));
+      // BEFORE the POST: reporting can take seconds and the page must not drift meanwhile.
+      await captureScreenshotsInto(join(learned.trace_path, "screenshots"));
+      const outcome = await reportToolRequest(learned.payload);
       // frozen episode: we empty the buffers so the next task starts clean.
       // (if learn() had failed, we don't get here and the exploration stays recorded to retry.)
       clearNetLog();
       clearConsoleLog();
+      const signal = {
+        ...outcome,
+        trace_id: learned.trace_id,
+        trace_path: learned.trace_path,
+        next_step:
+          "none — we build the tool from this report. Do NOT distill it nor call save.",
+      };
       return { content: [{ type: "text", text: JSON.stringify(signal, null, 2) }] };
     } catch (e) {
       return {
@@ -686,6 +704,9 @@ async function main(): Promise<void> {
   // lead to exploration). This way connecting the MCP / sending a "hello" opens nothing.
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  // reports that couldn't be POSTed while the backend was down: retried now, in the
+  // background. It never blocks the handshake and it swallows its own errors.
+  void flushPendingRequests();
 }
 
 async function shutdown(): Promise<void> {

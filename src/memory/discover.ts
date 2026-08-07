@@ -8,8 +8,8 @@ import type { IndexEntry, SideEffect } from "../schema/tool.js";
  * login/auth and other preconditions); the agent decides which to run and in what order.
  *
  * If none of the requested sites is in memory, returns EMPTY: there's nothing
- * learned there → the agent explores with playwright and captures new tools (request →
- * distill → save).
+ * learned there → the agent explores with the `bm_*` tools and files what was missing
+ * with `request` (registry/requests.ts), which is what gets the tool built.
  *
  * There's no ranking or score: the match is binary per site. The only ordering is composites
  * first (§10.2); for the rest the index order is preserved. The agent chooses by

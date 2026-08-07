@@ -152,6 +152,59 @@ export async function fetchRemoteTool(name: string): Promise<MemoryItem | null> 
   }
 }
 
+/**
+ * Result of POSTing a tool request. Unlike the rest of this file it does NOT swallow the
+ * failure: the report IS the deliverable (it's how we find out which tool is missing), so the
+ * caller needs to know whether to queue it on disk. `permanent` means the payload will never
+ * be accepted — retrying it would just fill the queue forever.
+ */
+export type ToolRequestResult =
+  | { ok: true; request_id: string | null; hits: number | null; state: string | null }
+  | { ok: false; permanent: boolean; code: number | null; message: string };
+
+/**
+ * POST of a "there was no tool for this" report (`/v1/requests`). Carries the goal, the
+ * canonical steps and the recorded xhr/fetch calls so the tool can be built from it.
+ * The payload is already redacted and capped by requests.ts.
+ */
+export async function postToolRequest(payload: unknown): Promise<ToolRequestResult> {
+  if (!registryConfig.enabled) {
+    return { ok: false, permanent: true, code: null, message: "registry disabled" };
+  }
+  try {
+    const res = await fetch(url(`/v1/requests`), {
+      method: "POST",
+      headers: headers(),
+      body: JSON.stringify(payload),
+      // more generous than the read timeout: the payload can weigh ~1 MB.
+      signal: AbortSignal.timeout(registryConfig.timeoutMs * 3),
+    });
+    if (res.ok) {
+      const body = (await res.json().catch(() => ({}))) as {
+        request_id?: string;
+        hits?: number;
+        status?: string;
+      };
+      return {
+        ok: true,
+        request_id: body.request_id ?? null,
+        hits: body.hits ?? null,
+        state: body.status ?? null,
+      };
+    }
+    // 400: malformed payload, it will never be accepted. 413: too big — the caller retries
+    // once in `metadata` mode before giving up. The rest (401/429/5xx/network) is transient.
+    return {
+      ok: false,
+      permanent: res.status === 400,
+      code: res.status,
+      message: `HTTP ${res.status}`,
+    };
+  } catch (e) {
+    return { ok: false, permanent: false, code: null, message: (e as Error).message };
+  }
+}
+
 /** POST of a usage event. Best-effort: swallows every error, never really blocks. */
 export async function postEvent(payload: Record<string, unknown>): Promise<void> {
   if (!registryConfig.enabled) return;

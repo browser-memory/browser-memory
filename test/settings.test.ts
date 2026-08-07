@@ -91,9 +91,14 @@ test("the remote registry is ON by default", async () => {
   assert.equal(registryConfig.enabled, true);
 });
 
-test("the CLI exposes home, registry-url and registry-enabled", () => {
+test("the CLI exposes home, registry-url, registry-enabled and request-report", () => {
   const cliKeys = SETTINGS.filter((s) => s.cli).map((s) => s.key);
-  assert.deepEqual(cliKeys.sort(), ["home", "registry-enabled", "registry-url"]);
+  assert.deepEqual(cliKeys.sort(), [
+    "home",
+    "registry-enabled",
+    "registry-url",
+    "request-report",
+  ]);
 });
 
 test("an un-interpolated placeholder is not a value", () => {

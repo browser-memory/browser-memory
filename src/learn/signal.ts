@@ -1,48 +1,42 @@
-import { readFileSync, existsSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
 import { persistTrace } from "../memory/traces.js";
+import { buildRequestPayload, type ToolRequestPayload } from "../registry/requests.js";
 import { LearnInput } from "../schema/trace.js";
 
 /**
- * learn (spec §5.3 / §9): invoked when an action was performed for the first time
- * for real and you want to capture it. It does NOT block: it persists the trace (frozen)
- * and emits a `pending_distill` signal that forces the agent to spawn a background
- * subagent that distills the trace and saves the resulting tools via the MCP (save).
+ * learn (spec §5.3 / §9): invoked when an action was performed for the first time for real
+ * and there was no tool for it. It persists the trace (frozen, on disk) and builds the
+ * REPORT that `request` then sends to the registry — that is how we find out which tool is
+ * missing and build it ourselves.
  *
- * The distill runs over the frozen trace and does NOT touch the browser.
+ * It used to return a `suggested_prompt` so the agent would spawn a distiller subagent. It
+ * no longer does: tools are built from the reported trace, not by the agent. See
+ * registry/requests.ts for what travels and settings `request-report` for how to trim it.
+ *
+ * It stays SYNCHRONOUS and free of I/O beyond the disk: the caller (index.ts) freezes the
+ * screenshots first and only then awaits the POST, so a slow backend never lets the page
+ * drift away from the state that was captured.
  */
 
-const here = dirname(fileURLToPath(import.meta.url));
-const PROMPT_PATH = join(here, "distill-prompt.md");
-
-function loadContract(): string {
-  if (existsSync(PROMPT_PATH)) return readFileSync(PROMPT_PATH, "utf8");
-  return "(distiller contract not found; see src/learn/distill-prompt.md)";
-}
-
-export interface LearnSignal {
-  status: "pending_distill";
+export interface LearnResult {
   trace_id: string;
   trace_path: string;
-  /** Self-contained prompt for the background distiller subagent. */
-  suggested_prompt: string;
+  /** Report to send with `reportToolRequest`. */
+  payload: ToolRequestPayload;
 }
 
-export function learn(rawInput: unknown): LearnSignal {
+export function learn(rawInput: unknown): LearnResult {
   const input = LearnInput.parse(rawInput);
   const { id, dir } = persistTrace(input);
 
-  const contract = loadContract();
-  const suggested_prompt =
-    `${contract}\n\n---\n\n` +
-    `## Trace to distill\n\n` +
-    `Goal: ${input.goal}\n` +
-    `trace_id: ${id}\n` +
-    `trace_path: ${dir}\n\n` +
-    `Read the files in \`trace_path\` (meta.json, narration.json, network.json), ` +
-    `distill according to the contract and save each tool/composite with the \`save\` ` +
-    `operation of the tool-memory MCP.`;
-
-  return { status: "pending_distill", trace_id: id, trace_path: dir, suggested_prompt };
+  return {
+    trace_id: id,
+    trace_path: dir,
+    payload: buildRequestPayload({
+      traceId: id,
+      goal: input.goal,
+      // same shape persistTrace wrote to narration.json (goal filled in, outcome defaulted).
+      narration: { ...input.narration, goal: input.narration.goal ?? input.goal },
+      network: input.network,
+    }),
+  };
 }
