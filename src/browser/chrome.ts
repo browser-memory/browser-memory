@@ -2,7 +2,7 @@ import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { mkdirSync, existsSync, rmSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright";
-import { cdpPort, cdpEndpoint, paths, resolveChromeBinary } from "../config.js";
+import { cdpPort, cdpEndpoint, paths, remoteCdpUrl, resolveChromeBinary } from "../config.js";
 
 /**
  * Owner of the lifecycle of this server's dedicated Chrome (spec §4).
@@ -127,6 +127,11 @@ export interface SharedChrome {
 }
 
 export async function launchSharedChrome(): Promise<SharedChrome> {
+  // Remote CDP: the browser already exists on the other side and nobody here owns its
+  // lifecycle. Nothing to launch, nothing to wait for — report the endpoint and let the
+  // caller attach. `reused: true` is the literal truth: we did not start that browser.
+  if (remoteCdpUrl) return { cdpEndpoint: remoteCdpUrl, reused: true };
+
   if (await cdpAlive()) {
     return { cdpEndpoint, reused: true };
   }

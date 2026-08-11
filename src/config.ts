@@ -35,8 +35,17 @@ export const paths = {
 /** Remote-debugging port of the shared Chrome. */
 export const cdpPort = Number(cfg("TOOL_MEMORY_CDP_PORT") ?? 9333);
 
-/** CDP endpoint of the dedicated Chrome; the replay runner and exploration tools attach to it. */
-export const cdpEndpoint = `http://127.0.0.1:${cdpPort}`;
+/**
+ * CDP of a browser that runs SOMEWHERE ELSE (Browserbase and friends): when it's set we
+ * own no Chrome process at all, we just attach to theirs. Everything downstream stays the
+ * same because a remote CDP behaves like the local one; what changes is the lifecycle,
+ * so `launchSharedChrome`/`closeSharedChrome` become no-ops (see browser/chrome.ts).
+ * Typically `wss://connect.browserbase.com?apiKey=...&sessionId=...`.
+ */
+export const remoteCdpUrl = cfg("TOOL_MEMORY_CDP_URL") ?? null;
+
+/** CDP endpoint the replay runner and exploration tools attach to: remote if set, else our own Chrome. */
+export const cdpEndpoint = remoteCdpUrl ?? `http://127.0.0.1:${cdpPort}`;
 
 /** First existing candidate from a list (or undefined). */
 function firstExisting(candidates: string[]): string | undefined {
