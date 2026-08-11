@@ -19,6 +19,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "bundle": "node scripts/bundle.mjs",
     "bundle:verify": "node scripts/bundle-verify.mjs",
     "test": "node --test --import tsx \"./test/*.test.ts\"",
