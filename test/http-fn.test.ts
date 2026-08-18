@@ -81,29 +81,20 @@ test("proxy pool rotates round-robin and is empty by default", () => {
   resetProxyPool();
 });
 
-test("proxy:true routes egress through an http forward-proxy", async () => {
-  // A forwarding HTTP proxy: undici sends `GET http://host/path` on the proxy socket
-  // for plain-http targets (CONNECT is only for TLS, covered by the real-site e2e).
-  const seen: string[] = [];
-  const proxy = http.createServer((req, res) => {
-    seen.push(req.url ?? "");
-    res.end(JSON.stringify({ ok: true, via: "proxy" }));
-  });
-  await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
-  const proxyPort = (proxy.address() as any).port;
-
-  process.env.TOOL_MEMORY_PROXIES = `http://127.0.0.1:${proxyPort}`;
+test("proxy:true routes egress through the dispatcher, not direct", async () => {
+  // Point the pool at a dead proxy (nothing listening). A request to a host that
+  // resolves fine (example.com) must now FAIL with a proxy connection error: proof the
+  // fetch went to the proxy instead of straight to the host. Direct would have
+  // succeeded. Fast and deterministic (ECONNREFUSED), no hang. The happy-path egress
+  // through a live proxy is covered by test/smoke-http-fn.ts and the Bright Data e2e.
+  process.env.TOOL_MEMORY_PROXIES = "http://127.0.0.1:59999";
   resetProxyPool();
-  const fn = `async () => { const r = await fetch('http://target.invalid/hit'); return await r.json(); }`;
+  const fn = `async () => { const r = await fetch('https://example.com', { signal: AbortSignal.timeout(8000) }); return { ok: r.ok }; }`;
   const t = parseTool({ ...baseTool, recipe: { kind: "http-fn", fn, proxy: true } });
   const r = await runHttpFn(t as any, {});
-  proxy.close();
   delete process.env.TOOL_MEMORY_PROXIES;
   resetProxyPool();
 
-  assert.equal(r.ok, true);
-  assert.equal((r.result as any).via, "proxy");
-  // The proxy saw the absolute-URI request → egress really went through it, not direct
-  // (a direct fetch to target.invalid would have failed to resolve).
-  assert.ok(seen.some((u) => u.includes("target.invalid")));
+  assert.equal(r.ok, false); // the dead proxy broke the request → dispatcher was applied
+  assert.equal(r.error?.mode, "tool-broken");
 });

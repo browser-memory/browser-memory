@@ -43,7 +43,7 @@
     "@modelcontextprotocol/sdk": "^1.12.0",
     "browser-use-sdk": "^3.8.4",
     "playwright": "^1.60.0",
-    "undici": "^8.10.0",
+    "undici": "^6.28.0",
     "zod": "^3.25.0"
   },
   "devDependencies": {
