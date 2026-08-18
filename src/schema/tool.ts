@@ -87,10 +87,34 @@ export const FetchReplayRecipe = z.object({
   url: z.string().optional(),
 });
 
+/**
+ * The same serialized `fn` as a fetch-replay, but run in Node instead of in the page.
+ *
+ * Use this over `fetch-replay` when the flow is pure HTTP (no DOM, no login the site
+ * only grants in-browser) AND you want server-side scale: `http-fn` runs with no browser
+ * and no origin lock, so calls are fully parallel, and with `proxy: true` each call
+ * leaves through the next IP of the BMEM_PROXIES pool. The runner gives the fn a
+ * per-call cookie jar, so a session set with `POST /api/sessions` still rides along —
+ * the fn is byte-for-byte the same one a `fetch-replay` would use.
+ *
+ * `fn` is a serialized async function called as `(params)`. It must read inputs from
+ * `params.<name>` and use only standard web globals (fetch, btoa, TextEncoder, …).
+ */
+export const HttpFnRecipe = z.object({
+  kind: z.literal("http-fn"),
+  /** Serialized async fn, called as (params) in Node. Returns the data. */
+  fn: z.string(),
+  /** Route each call through the next proxy in BMEM_PROXIES. Off → direct connection. */
+  proxy: z.boolean().optional(),
+  /** Informational origin the fn talks to, e.g. "https://www.jumbo.com.ar". */
+  origin: z.string().optional(),
+});
+
 export const Recipe = z.discriminatedUnion("kind", [
   PlaywrightRecipe,
   HttpRecipe,
   FetchReplayRecipe,
+  HttpFnRecipe,
 ]);
 export type Recipe = z.infer<typeof Recipe>;
 

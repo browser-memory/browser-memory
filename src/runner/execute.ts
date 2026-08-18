@@ -4,6 +4,7 @@ import { originOf } from "../browser/worker-tabs.js";
 import { saveItem } from "../memory/store.js";
 import { isComposite } from "../schema/tool.js";
 import { resolveItem, isRemoteSource } from "../registry/resolve.js";
+import { runHttpFn } from "./http-fn.js";
 import type {
   Tool,
   MemoryItem,
@@ -658,6 +659,14 @@ export async function run(
   // HTTP path: does not touch the browser.
   if (tool.recipe.kind === "http") {
     const res = await runHttp(tool, params);
+    bumpHealth(tool, res.ok, remote);
+    return { ...res, source, version: tool.version };
+  }
+
+  // http-fn path: runs the serialized fn in Node (cookie jar + optional egress proxy),
+  // no browser and no origin lock, so calls are fully parallel. See runner/http-fn.ts.
+  if (tool.recipe.kind === "http-fn") {
+    const res = await runHttpFn(tool, params);
     bumpHealth(tool, res.ok, remote);
     return { ...res, source, version: tool.version };
   }

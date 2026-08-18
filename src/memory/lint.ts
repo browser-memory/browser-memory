@@ -29,6 +29,9 @@ function recipeTexts(tool: Tool): string[] {
     // NOT the `fn`: like an extractor it receives params as an argument, it is not a
     // template. It is checked below, by the same rules as the extractor.
     texts.push(tool.recipe.origin, tool.recipe.url ?? "");
+  } else if (tool.recipe.kind === "http-fn") {
+    // Same as fetch-replay: the `fn` is not a template, it is checked in paramFns.
+    texts.push(tool.recipe.origin ?? "");
   } else {
     texts.push(tool.recipe.url, tool.recipe.body ?? "");
     for (const v of Object.values(tool.recipe.headers ?? {})) texts.push(v);
@@ -45,7 +48,8 @@ function recipeTexts(tool: Tool): string[] {
 function paramFns(tool: Tool): string[] {
   const fns: string[] = [];
   if (tool.result_extractor?.type === "dom") fns.push(tool.result_extractor.fn);
-  if (tool.recipe.kind === "fetch-replay") fns.push(tool.recipe.fn);
+  if (tool.recipe.kind === "fetch-replay" || tool.recipe.kind === "http-fn")
+    fns.push(tool.recipe.fn);
   return fns;
 }
 
