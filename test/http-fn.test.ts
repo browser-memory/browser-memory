@@ -71,13 +71,13 @@ test("proxy pool rotates round-robin and is empty by default", () => {
   resetProxyPool();
   assert.equal(proxyCount(), 0);
   assert.equal(nextDispatcher(), null);
-  process.env.BMEM_PROXIES = "http://a:1, http://b:1";
+  process.env.TOOL_MEMORY_PROXIES = "http://a:1, http://b:1";
   resetProxyPool();
   assert.equal(proxyCount(), 2);
   assert.equal(nextDispatcher()?.url, "http://a:1");
   assert.equal(nextDispatcher()?.url, "http://b:1");
   assert.equal(nextDispatcher()?.url, "http://a:1");
-  delete process.env.BMEM_PROXIES;
+  delete process.env.TOOL_MEMORY_PROXIES;
   resetProxyPool();
 });
 
@@ -92,13 +92,13 @@ test("proxy:true routes egress through an http forward-proxy", async () => {
   await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", () => r()));
   const proxyPort = (proxy.address() as any).port;
 
-  process.env.BMEM_PROXIES = `http://127.0.0.1:${proxyPort}`;
+  process.env.TOOL_MEMORY_PROXIES = `http://127.0.0.1:${proxyPort}`;
   resetProxyPool();
   const fn = `async () => { const r = await fetch('http://target.invalid/hit'); return await r.json(); }`;
   const t = parseTool({ ...baseTool, recipe: { kind: "http-fn", fn, proxy: true } });
   const r = await runHttpFn(t as any, {});
   proxy.close();
-  delete process.env.BMEM_PROXIES;
+  delete process.env.TOOL_MEMORY_PROXIES;
   resetProxyPool();
 
   assert.equal(r.ok, true);

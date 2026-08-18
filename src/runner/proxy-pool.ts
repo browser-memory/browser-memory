@@ -1,4 +1,5 @@
 import { ProxyAgent, type Dispatcher } from "undici";
+import { cfg } from "../settings.js";
 
 /**
  * A rotating pool of egress proxies for the `http-fn` runner.
@@ -9,9 +10,9 @@ import { ProxyAgent, type Dispatcher } from "undici";
  * Anónima, and any VTEX store that starts blocking) become scrapeable in parallel: N
  * searches, N IPs, no shared quota.
  *
- * The pool is read from the env, comma/newline/space separated, so IPs can be swapped
- * without a deploy:
- *   BMEM_PROXIES="http://user:pass@host1:port, http://user:pass@host2:port"
+ * The pool is read from the `proxies` setting (env TOOL_MEMORY_PROXIES or the config
+ * file), comma/space separated, so IPs can be swapped without a deploy:
+ *   TOOL_MEMORY_PROXIES="http://user:pass@host1:port, http://user:pass@host2:port"
  *
  * Each distinct proxy URL gets ONE cached ProxyAgent (a Dispatcher). `nextDispatcher()`
  * hands them out round-robin; a single `http-fn` call keeps the same dispatcher for all
@@ -33,9 +34,9 @@ let PROXIES: string[] | null = null;
 const agents = new Map<string, ProxyAgent>();
 let cursor = 0;
 
-/** Reads BMEM_PROXIES lazily and memoizes it (call `resetProxyPool()` in tests). */
+/** Reads the `proxies` setting lazily and memoizes it (call `resetProxyPool()` in tests). */
 function proxies(): string[] {
-  if (PROXIES === null) PROXIES = parseList(process.env.BMEM_PROXIES);
+  if (PROXIES === null) PROXIES = parseList(cfg("TOOL_MEMORY_PROXIES"));
   return PROXIES;
 }
 

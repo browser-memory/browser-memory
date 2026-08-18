@@ -135,6 +135,18 @@ export const SETTINGS: SettingDef[] = [
     validate: nonEmpty,
     cli: true,
   },
+  {
+    key: "proxies",
+    env: "TOOL_MEMORY_PROXIES",
+    describe:
+      "Egress proxies for `http-fn` tools with `proxy: true` (no effect on browser " +
+      "tools). Comma/space separated URLs, e.g. " +
+      "'http://user:pass@gateway:port'. Each http-fn call takes the next one round-robin " +
+      "(one gateway is often enough: residential providers rotate the exit IP per " +
+      "connection). Empty = direct connection off the local IP",
+    defaultDesc: "(none: direct connection)",
+    validate: nonEmpty,
+  },
 ];
 
 const BY_KEY = new Map(SETTINGS.map((s) => [s.key, s]));

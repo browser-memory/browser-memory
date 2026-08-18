@@ -60,14 +60,14 @@ async function main() {
 
   // 4: proxy pool rotation (synthetic; no real egress needed)
   resetProxyPool();
-  process.env.BMEM_PROXIES = "http://u:p@proxy-a:8000, http://u:p@proxy-b:8000, http://u:p@proxy-c:8000";
+  process.env.TOOL_MEMORY_PROXIES = "http://u:p@proxy-a:8000, http://u:p@proxy-b:8000, http://u:p@proxy-c:8000";
   resetProxyPool();
   const picks = [nextDispatcher(), nextDispatcher(), nextDispatcher(), nextDispatcher()].map((d) => d?.url);
   console.log(`[4] pool size=${proxyCount()} rotation=${JSON.stringify(picks)}`);
   const rotates = picks[0] === "http://u:p@proxy-a:8000" && picks[1] !== picks[0] && picks[3] === picks[0];
   if (!rotates) { console.error("  FAIL: round-robin rotation"); failures++; }
   resetProxyPool();
-  delete process.env.BMEM_PROXIES;
+  delete process.env.TOOL_MEMORY_PROXIES;
   resetProxyPool();
   if (nextDispatcher() !== null) { console.error("  FAIL: empty pool should be null (direct)"); failures++; }
   console.log(`[4b] empty pool → direct connection: ok`);
