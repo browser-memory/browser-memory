@@ -67,6 +67,36 @@ test("a per-call cookie jar carries Set-Cookie to the next request", async () =>
   assert.equal((r.result as any).cookie, "sid=abc123");
 });
 
+test("cookies are isolated per host (no cross-origin leak)", async () => {
+  // Two servers each set their OWN cookie; a request to one must never carry the other's.
+  const mk = (name: string) =>
+    new Promise<any>((resolve) => {
+      const s = http.createServer((req, res) => {
+        if (req.url === "/set") res.setHeader("set-cookie", `who=${name}; Path=/`);
+        res.end(JSON.stringify({ cookie: req.headers.cookie ?? null }));
+      });
+      s.listen(0, "127.0.0.1", () => resolve(s));
+    });
+  const a = await mk("A");
+  const b = await mk("B");
+  const pa = (a.address() as any).port;
+  const pb = (b.address() as any).port;
+  // Set a cookie on host A, then hit host B: B must see NO cookie (not A's).
+  const fn = `async () => {
+    await fetch('http://127.0.0.1:${pa}/set');
+    const rb = await fetch('http://127.0.0.1:${pb}/read');
+    const ra = await fetch('http://127.0.0.1:${pa}/read');
+    return { ok: true, bSaw: (await rb.json()).cookie, aSaw: (await ra.json()).cookie };
+  }`;
+  const t = parseTool({ ...baseTool, recipe: { kind: "http-fn", fn } });
+  const r = await runHttpFn(t as any, {});
+  a.close();
+  b.close();
+  assert.equal(r.ok, true);
+  assert.equal((r.result as any).bSaw, null); // host B never saw host A's cookie
+  assert.equal((r.result as any).aSaw, "who=A"); // host A still gets its own
+});
+
 test("proxy pool rotates round-robin and is empty by default", () => {
   resetProxyPool();
   assert.equal(proxyCount(), 0);

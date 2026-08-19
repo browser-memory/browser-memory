@@ -28,7 +28,11 @@ import { nextDispatcher } from "./proxy-pool.js";
 
 const FN_TIMEOUT_MS = 120_000;
 
-type CookieJar = Map<string, string>;
+// Cookies are scoped PER HOST, not global: a composite fn can talk to several origins
+// (jumbo, carrefour, masonline…) in parallel, and each sets its own `vtex_segment`. A
+// single flat jar would let the last writer's region cookie leak onto another chain's
+// request. Keyed by host, each origin only ever sees its own cookies.
+type CookieJar = Map<string, Map<string, string>>;
 
 /** "name=value; Path=/; HttpOnly" → ["name", "value"]. */
 function parseSetCookie(line: string): [string, string] | null {
@@ -38,20 +42,32 @@ function parseSetCookie(line: string): [string, string] | null {
   return [first.slice(0, eq).trim(), first.slice(eq + 1).trim()];
 }
 
-function cookieHeader(jar: CookieJar): string {
-  return [...jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
+/** Host of a request input (URL string, URL, or Request), or "" if it can't be parsed. */
+function hostOf(input: any): string {
+  try {
+    const url = typeof input === "string" ? input : (input?.url ?? String(input));
+    return new URL(url).host;
+  } catch {
+    return "";
+  }
+}
+
+function cookieHeader(hostJar: Map<string, string> | undefined): string {
+  if (!hostJar) return "";
+  return [...hostJar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
 /**
- * A `fetch` bound to one call: threads the cookie jar (reads Set-Cookie, resends
- * Cookie) and, if given, routes every request through the same proxy dispatcher. The fn
- * keeps calling plain `fetch(url, opts)` and `credentials: "include"` as if it were in
- * the page; the jar makes that a no-op-compatible truth here.
+ * A `fetch` bound to one call: threads the per-host cookie jar (reads Set-Cookie, resends
+ * Cookie for the SAME host only) and, if given, routes every request through the same
+ * proxy dispatcher. The fn keeps calling plain `fetch(url, opts)` and
+ * `credentials: "include"` as if it were in the page; the jar makes that a truth here.
  */
 function boundFetch(jar: CookieJar, dispatcher: Dispatcher | null): typeof fetch {
   return (async (input: any, init: any = {}) => {
+    const host = hostOf(input);
     const headers = new UndiciHeaders(init.headers || {});
-    const existing = cookieHeader(jar);
+    const existing = cookieHeader(jar.get(host));
     if (existing && !headers.has("cookie")) headers.set("cookie", existing);
     const res = await undiciFetch(input, {
       ...init,
@@ -62,9 +78,16 @@ function boundFetch(jar: CookieJar, dispatcher: Dispatcher | null): typeof fetch
       typeof (res.headers as any).getSetCookie === "function"
         ? (res.headers as any).getSetCookie()
         : [];
-    for (const line of setCookies) {
-      const kv = parseSetCookie(line);
-      if (kv) jar.set(kv[0], kv[1]);
+    if (setCookies.length && host) {
+      let hostJar = jar.get(host);
+      if (!hostJar) {
+        hostJar = new Map();
+        jar.set(host, hostJar);
+      }
+      for (const line of setCookies) {
+        const kv = parseSetCookie(line);
+        if (kv) hostJar.set(kv[0], kv[1]);
+      }
     }
     return res as unknown as Response;
   }) as typeof fetch;
